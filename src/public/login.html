@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Login</title>
+    <link rel="stylesheet" href="main.css">
+</head>
+<script type="text/javascript">
+    async function login(event) {
+        event.preventDefault();
+        const secret = document.getElementById("secret").value;
+
+        const request = new XMLHttpRequest();
+            request.open("POST", "api/login");
+            request.onload = async function () {
+                if(request.status === 200) {
+                    window.location.replace(new URLSearchParams(window.location.search).get("redirect"));
+                } else if(request.status === 401) {
+                    document.getElementById("error").textContent = "Invalid Credentials";
+                } else if(request.status === 429) {
+                    document.getElementById("error").textContent = "Too many requests. Please try again later";
+                } else {
+                    document.getElementById("error").textContent = "Something went wrong";
+                }
+            }
+            request.send(secret);
+    }
+</script>
+
+<body>
+<h1>Please login</h1>
+<form onSubmit="login(event)">
+    <label for="secret">Secret</label><input type="password" name="secret" id="secret" placeholder="Secret" autocomplete="secret">
+    <input type="submit" value="Login">
+</form>
+<p id="error" style="color: red"></p>
+</body>
+</html>

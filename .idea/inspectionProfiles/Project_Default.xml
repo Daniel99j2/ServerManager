@@ -1,0 +1,20 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="992068e5-18a9-3fe9-a343-3230aa086c33" enabled="true" level="ERROR" enabled_by_default="true" editorAttributes="WRONG_REFERENCES_ATTRIBUTES" />
+    <inspection_tool class="SSBasedInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <searchConfiguration name="Method calls to deprecated methods" text="$Instance$.$MethodCall$($Parameter$)" recursive="true" caseInsensitive="true" type="JAVA" pattern_context="default">
+        <constraint name="__context__" within="" contains="" />
+        <constraint name="Instance" minCount="0" within="" contains="" />
+        <constraint name="MethodCall" regexp="e" target="true" within="" contains="" />
+        <constraint name="Parameter" minCount="0" maxCount="2147483647" within="" contains="" />
+      </searchConfiguration>
+      <searchConfiguration name="Method usage limited" uuid="992068e5-18a9-3fe9-a343-3230aa086c33" suppressId="usagelimited" text="$Instance$.$MethodCall$($Parameter$)" recursive="true" caseInsensitive="true" type="JAVA" pattern_context="default">
+        <constraint name="__context__" script="&quot;def m = __context__.getMethodExpression()?.resolve()&#10;return m != null &amp;&amp; m.hasAnnotation(&quot;com.daniel99j.djutil.UsageLimited&quot;)&quot;" within="" contains="" />
+        <constraint name="Instance" minCount="0" within="" contains="" />
+        <constraint name="MethodCall" target="true" within="" contains="" />
+        <constraint name="Parameter" minCount="0" maxCount="2147483647" within="" contains="" />
+      </searchConfiguration>
+    </inspection_tool>
+  </profile>
+</component>
