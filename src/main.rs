@@ -10,37 +10,34 @@ use axum::{Json, Router, routing::get};
 use axum_extra::extract::cookie::CookieJar;
 use futures_util::{Stream, StreamExt};
 use include_dir::Dir as IncludedDir;
-use include_dir::{File, include_dir};
-use mc_rpc::{Client, ClientConfig, Player};
+use include_dir::{include_dir};
+use mc_rpc::{Client, ClientConfig};
 use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use std::fmt::format;
 use std::fs;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, Command};
-use tokio::sync::{broadcast, watch, Notify};
+use tokio::process::{Command};
+use tokio::sync::{broadcast};
 use tokio::sync::broadcast::Sender;
-use tower::util::ServiceExt;
-use tower_http::services::ServeFile;
-use tower_http::services::fs::ServeDir;
+use tokio::time::sleep;
 
 enum MinecraftStatus {
-    Online { command_tx: tokio::sync::mpsc::Sender<String>, manager: Client, players: Vec<String> },
     Offline,
-    Starting,
+    Starting { log: Vec<String> },
+    Online { command_tx: tokio::sync::mpsc::Sender<String>, manager: Client, players: Vec<String>, log: Vec<String>, tps: f32 },
     Stopping,
-    CrashedRebooting(String),
-    RunningWithoutManager,
+    Crashed,
 }
 
 struct AppState {
     status: MinecraftStatus,
     event_transmitter: OnceLock<Sender<String>>,
     logs_transmitter: OnceLock<Sender<String>>,
+    max_players: OnceLock<i32>
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -50,6 +47,8 @@ struct AppConfig {
     auto_restart: bool,
     execute_command: String,
     execute_command_arg: String,
+    site_port: i32,
+    tps_update_interval_seconds: i32,
     management_port: i32,
     management_secret: String,
 }
@@ -60,23 +59,26 @@ static STATE: Mutex<AppState> = Mutex::new(AppState {
     status: MinecraftStatus::Offline,
     event_transmitter: OnceLock::new(),
     logs_transmitter: OnceLock::new(),
+    max_players: OnceLock::new(),
 });
 
-const PAGES_DIR: IncludedDir = include_dir!("$CARGO_MANIFEST_DIR/src/public");
+const PAGES_DIR: IncludedDir = include_dir!("$CARGO_MANIFEST_DIR/src/gen/");
 
 #[tokio::main]
 async fn main() {
     let default_config = AppConfig {
         secret: Alphanumeric.sample_string(&mut rand::rng(), 32),
         auto_restart: true,
+        tps_update_interval_seconds: 180,
         no_share: "DO NOT SHARE YOUR SECRET!!!".parse().unwrap(),
         execute_command: "bash".parse().unwrap(),
         execute_command_arg: "start.sh".parse().unwrap(),
-        management_port: 1234,
+        site_port: 80,
+        management_port: 25585,
         management_secret: Alphanumeric.sample_string(&mut rand::rng(), 40),
     };
 
-    match fs::read_to_string("config.json") {
+    match fs::read_to_string("manager/config.json") {
         Ok(content) => match serde_json::from_str::<AppConfig>(&content) {
             Ok(c) => {
                 CONFIG.set(c).expect("Config was already set???!!!");
@@ -94,10 +96,16 @@ async fn main() {
         }
     }
     fs::write(
-        "config.json",
+        "manager/config.json",
         serde_json::to_string_pretty(&CONFIG.get()).expect("Config could not be serialized"),
     )
     .expect("Config could not be saved");
+
+    if !fs::read_dir("manager").is_ok() {
+        fs::create_dir("manager").unwrap();
+    }
+
+    let mut max_players = -2;
 
     match fs::read_to_string("server.properties") {
         Ok(content) => {
@@ -122,6 +130,9 @@ async fn main() {
                     ));
                 } else {
                     out.push(line.to_string());
+                }
+                if line.starts_with("max-players") {
+                    max_players = line.replace("max-players=", "").parse().unwrap_or(-1);
                 }
             }
             fs::write("server.properties", out.join("\n"))
@@ -149,9 +160,39 @@ async fn main() {
         let state = STATE.lock().unwrap();
         state.event_transmitter.set(transmitters.0).expect("");
         state.logs_transmitter.set(transmitters.1).expect("");
+        state.max_players.set(max_players).expect("");
     }
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_secs(CONFIG.get().unwrap().tps_update_interval_seconds as u64)).await;
+            let tx;
+            {
+                let state = STATE.lock().unwrap();
+
+                match &state.status {
+                    MinecraftStatus::Online { command_tx, players, .. } => {
+                        if players.len() > 0 {
+                            tx = command_tx.clone();
+                        }
+                        else {
+                            continue
+                        }
+                    },
+                    _ => continue
+                }
+            };
+
+            match tx.send("tick query".to_string()).await {
+                Ok(_) => {}
+                Err(_) => {
+                    println!("Failed to update tick status");
+                }
+            }
+        }
+    });
+
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", CONFIG.get().unwrap().site_port)).await.unwrap();
     axum::serve(listener, app)
         .await
         .expect("Error hosting webserver");
@@ -172,20 +213,23 @@ async fn static_html(cookies: CookieJar, req: Request<Body>) -> Response<Body> {
         return out;
     }
     let mut content_type = "";
-    if (!path.contains(".")) {
+    if !path.contains(".") {
         path = format!("{}.html", path);
         content_type = "text/html";
     }
-    if (PAGES_DIR.contains(path.clone())) {
+    if path.ends_with(".svg") {
+        content_type = "image/svg+xml";
+    }
+
+    if PAGES_DIR.contains(path.clone()) {
         match PAGES_DIR.get_file(path) {
             None => {}
             Some(v) => {
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, content_type)],
-                    v.contents(),
-                )
-                    .into_response();
+                    v.contents().to_vec()
+                ).into_response();
             }
         }
     }
@@ -228,9 +272,10 @@ async fn api_start(cookies: CookieJar) -> Response<Body> {
         return out;
     }
     {
-        let mut state = STATE.lock().unwrap();
+        let state = STATE.lock().unwrap();
         match state.status {
-            MinecraftStatus::Offline => {}
+            MinecraftStatus::Offline => {},
+            MinecraftStatus::Crashed => {}
             _ => return (StatusCode::BAD_REQUEST, "Server already running").into_response(),
         }
     }
@@ -246,7 +291,10 @@ async fn api_start(cookies: CookieJar) -> Response<Body> {
             .expect("Failed to start server");
         {
             let mut state = STATE.lock().unwrap();
-            state.status = MinecraftStatus::Starting;
+            state.status = MinecraftStatus::Starting{log: vec!["#### CLEAR MANAGER LOGS ####".to_string()]};
+            if let Some(transmitter) = state.logs_transmitter.get() {
+                let _ = transmitter.send("#### CLEAR MANAGER LOGS ####".to_string());
+            }
         }
         on_status_edited();
 
@@ -270,7 +318,7 @@ async fn api_start(cookies: CookieJar) -> Response<Body> {
         });
 
         while let Some(line) = lines.next_line().await.expect("Failed to read line") {
-            if(!line.contains("Named entity") && !line.contains("<")) {
+            if !line.contains("Named entity") && !line.contains("<") {
                 //This is fine even due to 'chat injections' as only mods can output at this time
                 if !has_started
                     && line.contains("Done (")
@@ -286,13 +334,24 @@ async fn api_start(cookies: CookieJar) -> Response<Body> {
                     {
                         let mut state = STATE.lock().unwrap();
                         let client = client.expect("Couldn't start management service");
+                        let mut logs = vec![];
+                        match &mut state.status {
+                                MinecraftStatus::Starting {log} => {
+                                    for line in log {
+                                        logs.push(line.clone());
+                                    }
+                                },
+                                _ => {}
+                            };
                         state.status = MinecraftStatus::Online {
+                            tps: 20.0,
+                            log: logs,
                             players: vec![],
                             manager: client,
                             command_tx: command_tx.clone(),
                         };
                     }
-                    let manager = {
+                    {
                         let state = STATE.lock().unwrap();
 
                         match &state.status {
@@ -300,13 +359,6 @@ async fn api_start(cookies: CookieJar) -> Response<Body> {
                             _ => return,
                         }
                     };
-                    // manager
-                    //     .allowlist_add(&vec![Player {
-                    //         id: "3039dead-e198-4ab3-8384-fa0739d712f5".to_string(),
-                    //         name: "Daniel99j".to_string(),
-                    //     }])
-                    //     .await
-                    //     .unwrap();
                     on_status_edited();
                     tokio::spawn(async move {
                         let manager = {
@@ -359,7 +411,7 @@ async fn api_start(cookies: CookieJar) -> Response<Body> {
                         }
                     });
                 }
-                if(line.ends_with("[Server thread/INFO]: Stopping server")) {
+                if line.ends_with("[Server thread/INFO]: Stopping server") {
                     about_to_stop = true;
                     {
                         let mut state = STATE.lock().unwrap();
@@ -369,12 +421,67 @@ async fn api_start(cookies: CookieJar) -> Response<Body> {
                 }
                 //Its always #1 as no other managers should be running
                 //This is the last thing printed before shutdown
-                if (about_to_stop && line.contains("[Management server IO #1/INFO]: RPC Connection #1: Management connection closed for /127.0.0.1:")) {
+                if about_to_stop && line.contains("[Management server IO") && line.contains(": Management connection closed for /127.0.0.1:") {
                     {
                         let mut state = STATE.lock().unwrap();
                         state.status = MinecraftStatus::Offline;
                     }
                     on_status_edited();
+                }
+                if line.eq("---- Minecraft Crash Report ----") || line.contains("[main/ERROR]: Failed to start the minecraft server") {
+                    {
+                        let mut state = STATE.lock().unwrap();
+                        state.status = MinecraftStatus::Crashed;
+                    }
+                    on_status_edited();
+                }
+                if line.starts_with("Average time per tick: ") {
+                    let prefix = "Average time per tick: ";
+
+                    let start = prefix.len();
+                    let end = line[start..]
+                        .find("ms")
+                        .map(|i| start + i)
+                        .unwrap_or(start);
+
+                    let text = &line[start..end];
+
+                    let target_start = line.find("(Target: ")
+                        .map(|i| i + "(Target: ".len())
+                        .unwrap_or(0);
+
+                    let target_end = line[target_start..]
+                        .find("ms)")
+                        .map(|i| target_start + i)
+                        .unwrap_or(target_start);
+
+                    let text2 = &line[target_start..target_end];
+
+                    let tick_rate = 1000.0 / text.parse().unwrap_or(-2.0);
+                    let target = 1000.0 / text2.parse().unwrap_or(-2.0);
+                    {
+                        let mut state = STATE.lock().unwrap();
+                        match &mut state.status {
+                            MinecraftStatus::Online { tps, .. } => {
+                                *tps = f32::min(target, tick_rate);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    on_status_edited();
+                }
+            }
+            {
+                let mut state = STATE.lock().unwrap();
+                match &mut state.status {
+                    MinecraftStatus::Online { log, .. } => {
+                        log.push(line.clone());
+                    },
+                    MinecraftStatus::Starting { log, .. } => {
+                        log.push(line.clone());
+                    },
+                    _ => {},
                 }
             }
             println!("Server: {}", line);
@@ -471,7 +578,35 @@ async fn api_live_logs(
 
     let mut rx = transmitter.1.subscribe();
 
+    let mut logs = vec![];
+    {
+        let mut state = STATE.lock().unwrap();
+            match &mut state.status {
+                MinecraftStatus::Starting { log, .. } => {
+                    for line in log {
+                        logs.push(line.clone());
+                    }
+                },
+                MinecraftStatus::Online { log, .. } => {
+                    let mut i = 0;
+                    for line in log.clone().iter().rev() {
+                        if i > 200 {
+                            break;
+                        }
+                        logs.push(line.clone());
+                        i+=1;
+                    }
+                },
+                _ => {},
+            };
+        }
+
+
     let stream = async_stream::stream! {
+        for line in logs.iter().rev() {
+            yield Ok(Event::default().data(line));
+        }
+
         while let Ok(msg) = rx.recv().await {
             yield Ok(Event::default().data(msg));
         }
@@ -508,6 +643,7 @@ struct SharedData {
     status_online: bool,
     players_online: i32,
     players: Vec<String>,
+    max_players: i32,
     tps: f32,
 }
 
@@ -526,30 +662,32 @@ fn create_status() -> String {
         out = serde_json::to_string(&SharedData {
             status: match state.status {
                 MinecraftStatus::Online { .. } => String::from("Online"),
-                MinecraftStatus::CrashedRebooting(..) => String::from("Crashed!"),
+                MinecraftStatus::Crashed => String::from("Crashed!"),
                 MinecraftStatus::Offline => String::from("Offline"),
                 MinecraftStatus::Stopping => String::from("Stopping"),
-                MinecraftStatus::Starting => String::from("Starting"),
-                MinecraftStatus::RunningWithoutManager => String::from("Running without manager"),
+                MinecraftStatus::Starting { .. } => String::from("Starting"),
             },
             status_colour: match state.status {
                 MinecraftStatus::Online { .. } => String::from("#2dcf58"),
-                MinecraftStatus::CrashedRebooting(..) => String::from("#cf332d"),
+                MinecraftStatus::Crashed => String::from("#cf332d"),
                 MinecraftStatus::Offline => String::from("#4d4d4d"),
                 MinecraftStatus::Stopping => String::from("#d9a300"),
-                MinecraftStatus::Starting => String::from("#d9a300"),
-                MinecraftStatus::RunningWithoutManager => String::from("#4287f5"),
+                MinecraftStatus::Starting { .. } => String::from("#d9a300"),
             },
             status_online: match state.status {
                 MinecraftStatus::Online { .. } => true,
                 MinecraftStatus::Stopping => true,
-                MinecraftStatus::Starting => true,
-                MinecraftStatus::RunningWithoutManager => true,
+                MinecraftStatus::Starting { .. } => true,
                 _ => false,
             },
             players_online: online.len() as i32,
             players: online,
-            tps: 20.0,
+            max_players: state.max_players.get().unwrap().clone(),
+            tps: match state.status {
+                MinecraftStatus::Online { tps, .. } => tps,
+                MinecraftStatus::Starting { .. } => 20.0, //So it doesnt show -1 when booting
+                _ => -1.0,
+            },
         })
         .unwrap();
     }
@@ -561,6 +699,8 @@ fn on_status_edited() {
     let sending = create_status();
     let state = STATE.lock().unwrap();
     if let Some(transmitter) = state.event_transmitter.get() {
-        let _ = transmitter.send(sending);
+        let _ = transmitter.send(sending.clone());
     }
+    fs::write("manager/previous_state.json", sending)
+    .expect("Config could not be saved");
 }

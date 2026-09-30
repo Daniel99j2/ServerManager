@@ -4,69 +4,13 @@
     <meta charset="UTF-8">
     <title>Console</title>
     <link rel="stylesheet" href="main.css">
+    <link rel="icon" type="image/x-icon" href="icon.png">
 </head>
-<script type="text/javascript">
-    async function run_command(event) {
-        event.preventDefault();
-        const secret = document.getElementById("command").value;
-
-        const request = new XMLHttpRequest();
-            request.open("POST", "api/send_command");
-            request.send(secret);
-    }
-
-        let generalStream = new EventSource("api/live_logs", {
-        withCredentials: true
-    });
-    generalStream.onmessage = (event) => {
-        let setScroll = false;
-        let oldHeight = document.getElementById("log-div").clientHeight;
-        if ((document.getElementById("log-div").scrollTop) / (document.getElementById("log-div").scrollHeight - document.getElementById("log-div").clientHeight) === 1) setScroll = true;
-
-        const lines = event.data.replaceAll("\\n", "\n").split("\n");
-
-        lines.forEach((line) => {
-            let slash = line.indexOf("/");
-            let prefix = line.substring(slash + 1, line.indexOf("]", slash));
-            console.log(prefix);
-            let style = "";
-            if (prefix === "INFO") {
-                style = "color: lime";
-            } else if (prefix === "WARN") {
-                style = "color: orange";
-            } else if (prefix === "FATAL") {
-                style = "color: red; background: #5d0202";
-            } else if (prefix === "ERROR") {
-                style = "color: red";
-            }
-            let element = document.createElement('p');
-            element.textContent = line;
-            element.style = style + "; margin: 2px";
-            document.getElementById('log-div').appendChild(element);
-        })
-
-        if (oldHeight !== document.getElementById("log-div").scrollHeight && !document.getElementById("log-div").dataset.hasScrolled) {
-            setScroll = true;
-            document.getElementById("log-div").dataset.hasScrolled = true;
-        }
-        if (setScroll) document.getElementById("log-div").scrollTop = 9999999999;
-    };
-    generalStream.onerror = (error) => {
-        console.error("Error in EventSource:", error);
-    };
-</script>
-
-<body>
-<h1>Console</h1>
-<form onSubmit="run_command(event)">
-    <label for="command">Secret</label><input type="text" name="command" id="command" placeholder="command" autocomplete="off">
-    <input type="submit" value="Run">
-</form>
-<p id="error" style="color: red"></p>
-<div style="border: 2px solid var(--border); border-radius: 4px; display: block; width: 80%; height: 60vh; padding: 10px;">
-    <h1>Log</h1>
-    <div style="overflow-y: auto; max-height: 80%; height: 100000000px" id="log-div">
-    </div>
+<script src="animate_late.js"></script>
+<body customproperties withsidebar>
+<div style="flex-grow: 1; display: flex; flex-direction: column; height: calc(100vh - 20px); width: calc(100vw - 40px); overflow: hidden;">
+    <h1 style="flex-shrink: 0;">Console</h1>
+    <iframe src="console_embed.html" style="border: none; flex-grow: 1;overflow: auto;"></iframe>
 </div>
 </body>
 </html>
