@@ -1,11 +1,11 @@
 <script defer src="sidebar.js"></script>
 <svgfrom src="menu.svg" onclick="toggleSidebar()" id="sidebar-enable"></svgfrom>
-<div style="border-right: solid 4px var(--border); width: 200px; height: 100vh; left: 0; top: 0; position: absolute; padding: 0 10px 0 10px" id="sidebar">
+<div style="border-right: solid 4px var(--border); width: 200px; height: 100vh; left: 0; top: 0; position: absolute; padding: 0 10px 0 10px; background: var(--bg)" id="sidebar">
     <svgfrom src="x.svg" onclick="toggleSidebar()" id="sidebar-disable"></svgfrom>
-    <h1>Manager</h1>
-    <h1>Dashboard</h1>
-    <h1>Options</h1>
-    <h1>Logs</h1>
-    <h1>Mods</h1>
-    <h1>Files</h1>
+    <h1 style="font-size: 480%; margin: 0"><svgfrom src="icon.svg"></svgfrom></h1>
+    <h1 class="sidebaritem">Dashboard</h1>
+    <h1 class="sidebaritem">Console</h1>
+    <h1 class="sidebaritem">Options</h1>
+    <h1 class="sidebaritem">Mods</h1>
+    <h1 class="sidebaritem">Files</h1>
 </div>

@@ -39,7 +39,7 @@ fn main() {
                             let name = target;
                             let svg = fs::read_to_string(format!("src/public/{}", name));
                             if svg.is_ok() {
-                                let svg = svg.unwrap().replace("<svg", "style=\"height:1em; vertical-align:-0.125em\"");
+                                let svg = svg.unwrap().replace("<svg", "style=\"height:1em; width:auto; vertical-align:-0.125em\"");
                                 //its not pretty but it works!
                                 c = c
                                     .replacen(
