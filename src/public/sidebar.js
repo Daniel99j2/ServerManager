@@ -1,8 +1,8 @@
-let sidebar_open = localStorage.getItem("sidebar_open") || true;
+let sidebar_open = localStorage.getItem("sidebar_open") === 'true';
 
 async function set_sidebar(v) {
     sidebar_open = v;
-    if (v === true) {
+    if (v === false) {
         document.getElementById("sidebar").style.transform = "translateX(-110%)"
         document.getElementById("sidebar-enable").style.opacity = "100"
     } else {

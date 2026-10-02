@@ -12,6 +12,7 @@ dependencies = [
  "build-print",
  "futures-util",
  "include_dir",
+ "mc-rcon",
  "mc-rpc",
  "rand",
  "serde",
@@ -19,6 +20,12 @@ dependencies = [
  "tokio",
  "urlencoding",
 ]
+
+[[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "async-stream"
@@ -560,6 +567,15 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "mc-rcon"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7274fcd1a810664c2f8e3dd115750dee793e38085a1f4792c5f957c0b756e650"
+dependencies = [
+ "arrayvec",
+]
 
 [[package]]
 name = "mc-rpc"

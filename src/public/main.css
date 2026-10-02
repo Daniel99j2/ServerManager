@@ -136,3 +136,30 @@ input::placeholder {
     right: 10px;
     top: 10px
 }
+
+.utility-button {
+    background-color: #4287f5;
+    border: none;
+    color: white;
+    padding: 0;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    width: 32px;
+    height: 32px;
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    margin: 4px 2px;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+#kill-server {
+    bottom: 36px;
+}
+
+#kill-server {
+    background-color: #aa0404;
+}

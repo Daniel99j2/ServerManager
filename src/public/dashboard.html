@@ -17,7 +17,9 @@
         if (event.detail.status_online) {
             document.getElementById("start-stop").className = "redbutton"
             document.getElementById("start-stop").innerHTML = '<svgfrom src="stop.svg"></svgfrom> Stop'
-            document.getElementById("status-text").innerHTML = '<svgfrom src="users.svg"></svgfrom> '+event.detail.players_online+'/'+event.detail.max_players+'　•　 <svgfrom src="gauge.svg"></svgfrom> '+event.detail.tps.toFixed(1);
+            let tps = event.detail.tps.toFixed(1);
+            if(tps === "-500.0") tps = "???";
+            document.getElementById("status-text").innerHTML = '<svgfrom src="users.svg"></svgfrom> '+event.detail.players_online+'/'+event.detail.max_players+'　•　 <svgfrom src="gauge.svg"></svgfrom> '+tps;
         } else {
             document.getElementById("start-stop").className = "greenbutton"
             document.getElementById("start-stop").innerHTML = '<svgfrom src="power.svg"></svgfrom> Start'
@@ -33,14 +35,31 @@
         }
         request.send();
     }
+
+    async function reboot(event) {
+        const request = new XMLHttpRequest();
+        request.open("POST", "api/reboot_server");
+        request.send();
+    }
+
+    async function kill(event) {
+        const request = new XMLHttpRequest();
+        request.open("POST", "api/kill_server");
+        request.send();
+    }
 </script>
 <h1>Dashboard</h1>
-<div class="dashboard-status" style="height: 12vh; width: 10vw; border: solid 4px var(--border); border-radius: 4px; margin: 0">
-    <div id="current-status-circle" style="height: 4vh; width: 10vw; background-color: red; position: fixed; outline: solid 4px; outline-color: red; border-radius: 4px 4px 0 0; justify-content: center; align-content: center">
-        <h3 id="current-status" style="margin: 0; text-align: center">Offline</h3>
+<div class="dashboard-status" style="height: auto; width: 10vw; border: solid 4px var(--border); border-radius: 4px; margin: 0">
+    <div id="current-status-circle" style="height: 4vh; width: 10vw; outline: solid 4px var(--border); border-radius: 4px 4px 0 0; justify-content: center; align-content: center">
+        <h3 id="current-status" style="margin: 0; text-align: center"></h3>
     </div>
-    <div style="position: relative; transform: translateY(4vh); height: 8vh; width: 10vw; align-content: center; justify-content: center">
-        <p style="text-align: center" id="status-text"><svgfrom src="users.svg"></svgfrom> 20/20　•　<svgfrom src="gauge.svg"></svgfrom> 20.0</p>
+    <div style="position: relative; height: auto; width: 10vw; justify-content: center; align-items: center; display: flex; flex-direction: column">
+        <p style="text-align: center; height: 1em" id="status-text"></p>
+        <div style="display: flex; flex-direction: row">
+            <button class="greybutton" id="start-stop" onclick="startStop()" style="width: 120px;">Start</button>
+            <button class="utility-button" onclick="reboot()"><svgfrom src="refresh-cw.svg"></svgfrom></button>
+            <button class="utility-button" onclick="kill()" id="kill-server"><svgfrom src="skull.svg"></svgfrom></button>
+        </div>
     </div>
 </div>
 <div class="dashboard-grid" id="dashboard-grid" style="display: flex; flex-direction: row">
@@ -51,7 +70,6 @@
         </div>
         <div class="dashboard-box">
             <h2 class="dashboard-header">Options</h2>
-            <button class="greybutton" id="start-stop" onclick="startStop()">Start</button>
         </div>
     </div>
     <div class="dashboard-column" style="overflow: hidden;">
