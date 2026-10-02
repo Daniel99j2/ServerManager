@@ -51,6 +51,7 @@ for (let sidebar_item of document.getElementsByClassName("sidebaritem")) {
         let hover = null;
         sidebar_item.onclick = function () {
             window.location.assign(sidebar_item.textContent.toLowerCase());
+            toggleSidebar();
         }
         sidebar_item.onmouseenter = function () {
             hover = makePointer(false);

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Logs</title>
+    <link rel="stylesheet" href="main.css">
+    <link rel="icon" type="image/x-icon" href="icon.svg">
+</head>
+<script src="animate_late.js"></script>
+<body customproperties withsidebar>
+<div style="flex-grow: 1; display: flex; flex-direction: column; height: calc(100vh - 4rem - 16px); width: calc(100vw - 40px); overflow: hidden;">
+    <div style="flex-shrink: 0; display: flex; flex-direction: row; align-items: center">
+        <h1>Log</h1>
+        <label for="file_name"></label>
+        <select id="file_name" style="margin-left: auto; height: 50%">
+            <option value="latest.log">latest.log</option>
+        </select>
+    </div>
+    <iframe src="console_embed.html?name=latest.log" style="border: none; flex-grow: 1; overflow: auto;" id="embed"></iframe>
+</div>
+<script type="text/javascript">
+    function reload() {
+
+    }
+
+    const request = new XMLHttpRequest();
+    request.open("GET", "api/all_logs");
+    request.onload = async function () {
+        if (request.status === 200) {
+            document.getElementById("file_name").replaceChildren();
+            request.response.split(", ").sort().reverse().forEach((name) => {
+                console.log(name)
+                let element = document.createElement('option');
+                element.value = name;
+                element.textContent = name;
+                document.getElementById("file_name").appendChild(element);
+            });
+        }
+    }
+    request.send();
+
+    document.getElementById("file_name").addEventListener('change', (event) => {
+        console.log('Selected value:', event.target.value);
+        document.getElementById("embed").src = "console_embed.html?name="+event.target.value;
+    });
+
+</script>
+</body>
+</html>

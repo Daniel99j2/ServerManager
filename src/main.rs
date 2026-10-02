@@ -1,39 +1,32 @@
+mod manage_server;
+mod get_info;
+
 use axum::body::Body;
-use axum::extract::State;
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::http::{Request, Response, Uri};
-use axum::response::sse::{Event, KeepAlive};
-use axum::response::{IntoResponse, Redirect, Sse};
+use axum::response::{IntoResponse, Redirect};
 use axum::routing::post;
-use axum::{Json, Router, routing::get};
+use axum::{Router, routing::get};
 use axum_extra::extract::cookie::CookieJar;
-use futures_util::{Stream, StreamExt};
 use include_dir::Dir as IncludedDir;
 use include_dir::{include_dir};
-use mc_rpc::{Client, ClientConfig};
+use mc_rpc::{Client};
 use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
-use std::error::Error;
 use std::fs;
-use std::net::TcpStream;
-use std::process::Stdio;
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
-use mc_rcon::CommandError;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Command};
-use tokio::select;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast};
 use tokio::sync::broadcast::Sender;
 use tokio::time::sleep;
 
 enum MinecraftStatus {
     Offline,
-    Starting { log: Vec<String> },
-    Online { command_tx: tokio::sync::mpsc::Sender<String>, manager: Client, players: Vec<String>, log: Vec<String>, tps: f32, rcon: mc_rcon::RconClient},
-    Stopping,
+    Starting { stop_tx: tokio::sync::mpsc::Sender<String>, log_line: i64 },
+    Online { command_tx: tokio::sync::mpsc::Sender<String>, stop_tx: tokio::sync::mpsc::Sender<String>, manager: Client, players: Vec<String>, tps: f32, rcon: mc_rcon::RconClient, log_line: i64},
+    Stopping { stop_tx: tokio::sync::mpsc::Sender<String> },
     Crashed,
 }
 
@@ -42,7 +35,8 @@ struct AppState {
     event_transmitter: OnceLock<Sender<String>>,
     logs_transmitter: OnceLock<Sender<String>>,
     max_players: OnceLock<i32>,
-    reboot_requested: bool
+    reboot_requested: bool,
+    last_crash: Option<Instant>
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -53,11 +47,13 @@ struct AppConfig {
     execute_command: String,
     execute_command_arg: String,
     site_port: i32,
-    tps_update_interval_seconds: i32,
+    tps_update_interval_seconds: u64,
     management_port: i32,
     management_secret: String,
     rcon_port: i32,
     rcon_password: String,
+    manager_discord_webhook: String,
+    anti_crash_loop_time_seconds: u64
 }
 
 static CONFIG: OnceLock<AppConfig> = OnceLock::new();
@@ -68,6 +64,7 @@ static STATE: Mutex<AppState> = Mutex::new(AppState {
     logs_transmitter: OnceLock::new(),
     max_players: OnceLock::new(),
     reboot_requested: false,
+    last_crash: None
 });
 
 const PAGES_DIR: IncludedDir = include_dir!("$CARGO_MANIFEST_DIR/src/gen/");
@@ -77,7 +74,7 @@ async fn main() {
     let default_config = AppConfig {
         secret: Alphanumeric.sample_string(&mut rand::rng(), 32),
         auto_restart: true,
-        tps_update_interval_seconds: 180,
+        tps_update_interval_seconds: 60,
         no_share: "DO NOT SHARE YOUR CONFIG OR SECRETS!!!".parse().unwrap(),
         execute_command: "bash".parse().unwrap(),
         execute_command_arg: "start.sh".parse().unwrap(),
@@ -86,6 +83,8 @@ async fn main() {
         management_secret: Alphanumeric.sample_string(&mut rand::rng(), 40),
         rcon_port: 25575,
         rcon_password: Alphanumeric.sample_string(&mut rand::rng(), 40),
+        manager_discord_webhook: "".parse().unwrap(),
+        anti_crash_loop_time_seconds: 180
     };
 
     match fs::read_to_string("manager/config.json") {
@@ -166,15 +165,17 @@ async fn main() {
     let transmitters = (broadcast::channel::<String>(100).0, broadcast::channel::<String>(100).0);
 
     let app = Router::new()
-        .route("/testing/{e}", get(|| async { "Hello, World! {body}" }))
-        .route("/test", post(create_user))
         .route("/api/login", post(api_login))
-        .route("/api/live_logs", get(api_live_logs))
-        .route("/api/live_updates", get(api_live_updates))
-        .route("/api/start_server", post(api_start))
-        .route("/api/stop_server", post(api_stop))
-        .route("/api/send_command", post(api_send_command))
-        .route("/api/reboot_server", post(api_restart))
+        .route("/api/live_logs", get(get_info::api_live_logs))
+        .route("/api/live_updates", get(get_info::api_live_updates))
+        .route("/api/start_server", post(manage_server::api_start))
+        .route("/api/stop_server", post(manage_server::api_stop))
+        .route("/api/send_command", post(manage_server::api_send_command))
+        .route("/api/reboot_server", post(manage_server::api_restart))
+        .route("/api/kill_server", post(manage_server::api_kill))
+        .route("/api/read_log", post(get_info::api_read_log))
+        .route("/api/log_line_count", post(get_info::api_log_line_count))
+        .route("/api/all_logs", get(get_info::api_all_logs))
         .fallback_service(get(static_html))
         .with_state(transmitters.clone());
     include_bytes!("public/main.css");
@@ -191,9 +192,13 @@ async fn main() {
             sleep(Duration::from_secs(CONFIG.get().unwrap().tps_update_interval_seconds as u64)).await;
 
             {
-                let state = STATE.lock().unwrap();
-                match state.status {
-                    MinecraftStatus::Online { .. } => {},
+                let mut state = STATE.lock().unwrap();
+                match &mut state.status {
+                    MinecraftStatus::Online { players, .. } => {
+                        if players.len() == 0 {
+                            continue;
+                        }
+                    },
                     _ => continue,
                 }
             }
@@ -271,16 +276,25 @@ async fn main() {
         }
     });
 
+    match fs::read_to_string("manager/previous_state.json") {
+        Ok(content) => match serde_json::from_str::<SharedData>(&content) {
+            Ok(c) => {
+                if c.status_online {
+                    let send = "Host rebooted whilst server was online, restarting server!";
+                    send_webhook(send.to_string()).await;
+                    println!("{}", send);
+                    manage_server::start_server();
+                }
+            }
+            Err(_) => {}
+        },
+        Err(_) => {}
+    }
+
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", CONFIG.get().unwrap().site_port)).await.unwrap();
     axum::serve(listener, app)
         .await
         .expect("Error hosting webserver");
-}
-
-#[derive(Deserialize)]
-struct CreateUserPayload {
-    val: i32,
-    enabled: bool,
 }
 
 async fn static_html(cookies: CookieJar, req: Request<Body>) -> Response<Body> {
@@ -315,17 +329,6 @@ async fn static_html(cookies: CookieJar, req: Request<Body>) -> Response<Body> {
     (StatusCode::NOT_FOUND, "File not found!").into_response()
 }
 
-async fn create_user(cookies: CookieJar, Json(payload): Json<CreateUserPayload>) -> Response<Body> {
-    if let Some(out) = check_auth(cookies, None) {
-        return out;
-    }
-    (
-        StatusCode::OK,
-        format!("{}, {}", payload.val, payload.enabled),
-    )
-        .into_response()
-}
-
 async fn api_login(payload: String) -> Response<Body> {
     if payload.eq(&CONFIG.get().unwrap().secret) {
         let mut out = (StatusCode::OK, "").into_response();
@@ -346,262 +349,36 @@ async fn api_login(payload: String) -> Response<Body> {
     }
 }
 
-async fn api_start(cookies: CookieJar) -> Response<Body> {
-    if let Some(out) = check_auth(cookies, None) {
-        return out;
-    }
-    {
-        let state = STATE.lock().unwrap();
-        match state.status {
-            MinecraftStatus::Offline => {},
-            MinecraftStatus::Crashed => {}
-            _ => return (StatusCode::BAD_REQUEST, "Server already running").into_response(),
-        }
-    }
-
-    start_server();
-
-    (StatusCode::OK, "").into_response()
+#[derive(Serialize, Deserialize, Debug)]
+struct WebhookRequest {
+    content: String
 }
 
-fn start_server() {
-    tokio::spawn(async move {
-        println!("Starting server");
-
-        let mut output = Command::new(CONFIG.get().unwrap().execute_command.clone())
-            .arg(CONFIG.get().unwrap().execute_command_arg.clone())
-            .stdout(Stdio::piped())
-            .stdin(Stdio::piped())
-            .spawn()
-            .expect("Failed to start server");
-        {
-            let mut state = STATE.lock().unwrap();
-            state.status = MinecraftStatus::Starting{log: vec!["#### CLEAR MANAGER LOGS ####".to_string()]};
-            if let Some(transmitter) = state.logs_transmitter.get() {
-                let _ = transmitter.send("#### CLEAR MANAGER LOGS ####".to_string());
-            }
-        }
-        on_status_edited();
-
-        let (command_tx, mut command_rx) = tokio::sync::mpsc::channel::<String>(32);
-        let t = output.stdout.take().expect("Unable to get stdout");
-        let reader = BufReader::new(t);
-        let mut lines = reader.lines();
-
-        let mut has_started = false;
-        let mut about_to_stop = false;
-
-
-        tokio::spawn(async move {
-            let mut stdin = output.stdin.take().expect("Unable to get stdin");
-
-            loop {
-                if let Some(command) = command_rx.recv().await {
-                    stdin.write_all(format!("{}\n", command).as_bytes()).await.expect("Failed to write command");
-                }
-            }
-        });
-
-        while let Some(line) = lines.next_line().await.expect("Failed to read line") {
-            if !line.contains("Named entity") && !line.contains("<") {
-                //This is fine even due to 'chat injections' as only mods can output at this time
-                if !has_started
-                    && line.contains("Done (")
-                    && line.ends_with(")! For help, type \"help\"")
-                {
-                    has_started = true;
-                    println!("Server started!");
-                    let client = Client::new(
-                        format!("ws://localhost:{}", &CONFIG.get().unwrap().management_port),
-                        ClientConfig::with_bearer(&CONFIG.get().unwrap().management_secret),
-                    ).await;
-                    let rcon = mc_rcon::RconClient::connect(format!("localhost:{}", CONFIG.get().unwrap().rcon_port)).expect("Failed to start RCON client");
-                    rcon.log_in(CONFIG.get().unwrap().rcon_password.as_str()).expect("Failed to log into RCON client");
-
-                    {
-                        let mut state = STATE.lock().unwrap();
-                        let client = client.expect("Couldn't start management service");
-                        let mut logs = vec![];
-                        match &mut state.status {
-                                MinecraftStatus::Starting {log} => {
-                                    for line in log {
-                                        logs.push(line.clone());
-                                    }
-                                },
-                                _ => {}
-                            };
-                        state.status = MinecraftStatus::Online {
-                            tps: 20.0,
-                            log: logs,
-                            players: vec![],
-                            manager: client,
-                            command_tx: command_tx.clone(),
-                            rcon,
-                        };
-                    }
-                    {
-                        let state = STATE.lock().unwrap();
-
-                        match &state.status {
-                            MinecraftStatus::Online { manager, .. } => manager.clone(),
-                            _ => return,
-                        }
-                    };
-                    on_status_edited();
-                    tokio::spawn(async move {
-                        let manager = {
-                            let state = STATE.lock().unwrap();
-
-                            match &state.status {
-                                MinecraftStatus::Online { manager, .. } => manager.clone(),
-                                _ => return,
-                            }
-                        };
-
-                        //For some reason the server/ notifications dont work so I have to rely on logs!
-                        let mut join = manager.notification_players_joined().await.unwrap();
-                        let mut leave = manager.notification_players_left().await.unwrap();
-
-
-
-                        loop {
-                            tokio::select! {
-                                Some(v) = join.next() => {
-                                    println!("Join2");
-                                    {
-                                        let mut state = STATE.lock().unwrap();
-
-                                        match &mut state.status {
-                                            MinecraftStatus::Online { players, .. } => {
-                                                players.push(v.unwrap().unwrap().get(0).unwrap().name.clone());
-                                            },
-                                            _ => return,
-                                        }
-                                    }
-                                    on_status_edited();
-                                }
-                                Some(v) = leave.next() => {
-                                    println!("Leave");
-                                    let name = v.unwrap().unwrap().get(0).unwrap().name.clone();
-                                    {
-                                        let mut state = STATE.lock().unwrap();
-
-                                        match &mut state.status {
-                                            MinecraftStatus::Online { players, .. } => {
-                                                players.retain(|a| !a.eq(&name));
-                                            },
-                                            _ => return,
-                                        }
-                                    }
-                                    on_status_edited();
-                                }
-                            }
-                        }
-                    });
-                }
-                if line.ends_with("[Server thread/INFO]: Stopping server") {
-                    about_to_stop = true;
-                    {
-                        let mut state = STATE.lock().unwrap();
-                        state.status = MinecraftStatus::Stopping;
-                    }
-                    on_status_edited();
-                }
-                //Its always #1 as no other managers should be running
-                //This is the last thing printed before shutdown
-                if about_to_stop && line.contains("[Management server IO") && line.contains(": Management connection closed for /127.0.0.1:") {
-                    let to_reboot;
-                    {
-                        let mut state = STATE.lock().unwrap();
-                        state.status = MinecraftStatus::Offline;
-                        to_reboot = state.reboot_requested;
-                        state.reboot_requested = false;
-                    }
-                    on_status_edited();
-                    if to_reboot {
-                        start_server()
-                    }
-                    return;
-                }
-                if line.eq("---- Minecraft Crash Report ----") || line.contains("[main/ERROR]: Failed to start the minecraft server") {
-                    {
-                        let mut state = STATE.lock().unwrap();
-                        state.status = MinecraftStatus::Crashed;
-                    }
-                    on_status_edited();
-                    return;
-                }
-            }
-            {
-                let mut state = STATE.lock().unwrap();
-                match &mut state.status {
-                    MinecraftStatus::Online { log, .. } => {
-                        log.push(line.clone());
-                    },
-                    MinecraftStatus::Starting { log, .. } => {
-                        log.push(line.clone());
-                    },
-                    _ => {},
-                }
-            }
-            println!("Server: {}", line);
-
-            {
-                let state = STATE.lock().unwrap();
-                if let Some(transmitter) = state.logs_transmitter.get() {
-                    let _ = transmitter.send(line);
-                }
-            }
-        }
-    });
-}
-
-async fn api_stop(cookies: CookieJar) -> Response<Body> {
-    if let Some(out) = check_auth(cookies, None) {
-        return out;
+async fn send_webhook(text: String) {
+    if CONFIG.get().unwrap().manager_discord_webhook.is_empty() {
+        println!("E");
+        return;
     }
-    let manager = {
-        let state = STATE.lock().unwrap();
+    let client = reqwest::Client::new();
 
-        match &state.status {
-            MinecraftStatus::Online { manager, .. } => manager.clone(),
-            _ => {
-                return (StatusCode::BAD_REQUEST, "Server not running",).into_response();
-            }
-        }
+    let new_post = WebhookRequest {
+        content: text
     };
 
-    manager.server_stop().await.expect("Failed to stop server");
-    (StatusCode::OK, "").into_response()
-}
-
-async fn api_restart(cookies: CookieJar) -> Response<Body> {
-    if let Some(out) = check_auth(cookies, None) {
-        return out;
+    let out = client.post(CONFIG.get().unwrap().manager_discord_webhook.clone())
+        .body(serde_json::to_string(&new_post).unwrap())
+        .header(header::CONTENT_TYPE, "application/json")
+        .send()
+        .await;
+    match out {
+        Ok(_) => {
+        }
+        Err(_) => {
+            println!("Failed to send webhook");
+        }
     }
-
-    let manager = {
-        let mut state = STATE.lock().unwrap();
-
-        let out = match &mut state.status {
-            MinecraftStatus::Online { manager, .. } => {
-                manager.clone()
-            },
-            _ => {
-                return (StatusCode::BAD_REQUEST, "Server not running",).into_response();
-            }
-        };
-        state.reboot_requested = true;
-
-        out
-    };
-
-    run_command("kick @a Server Restarting...".to_string());
-
-    manager.server_stop().await.expect("Failed to stop server");
-
-    (StatusCode::OK, "").into_response()
 }
+
 
 fn run_command(command: String) -> String {
     let out;
@@ -627,101 +404,35 @@ fn run_command(command: String) -> String {
     out
 }
 
-async fn api_send_command(cookies: CookieJar, payload: String) -> Response<Body> {
-    if let Some(out) = check_auth(cookies, None) {
-        return out;
-    }
-    let command_tx = {
-        let state = STATE.lock().unwrap();
+fn safe_file(dir_name: &str, file_name: &str) -> Result<Vec<u8>, String> {
+    let dir_path = Path::new(dir_name);
+    let full_path = dir_path.join(file_name);
 
-        match &state.status {
-            MinecraftStatus::Online { command_tx, .. } => command_tx.clone(),
-            _ => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "Server not running",
-                )
-                    .into_response();
-            }
+    // removes .. or symlinks
+    let canonical_dir = match dir_path.canonicalize() {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(format!("Can't canonicalize {}", dir_path.display()));
+        }
+    };
+    let canonical_file = match full_path.canonicalize() {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(format!("Can't canonicalize {}", full_path.display()));
         }
     };
 
-    command_tx
-        .send(payload.clone())
-        .await
-        .expect("Couldn't send payload");
-
-    println!("Running command {}", payload.clone());
-
-
-    (StatusCode::OK, "").into_response()
-}
-
-async fn api_live_updates(
-    State(transmitter): State<(Sender<String>, Sender<String>)>,
-    cookies: CookieJar,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
-    if let Some(_) = check_auth(cookies, None) {
-        return Err(StatusCode::UNAUTHORIZED);
+    // it has to start with the intended directory
+    if !canonical_file.starts_with(canonical_dir) {
+        return Err("File escaped the allowed dir".to_string());
     }
 
-    let mut rx = transmitter.0.subscribe();
-
-    let stream = async_stream::stream! {
-        yield Ok(Event::default()
-            .data(create_status()));
-
-        while let Ok(msg) = rx.recv().await {
-            yield Ok(Event::default().data(msg));
+    match fs::read(canonical_file) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            Err("Failed to read file".to_string())
         }
-    };
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
-}
-
-async fn api_live_logs(
-    State(transmitter): State<(Sender<String>, Sender<String>)>,
-    cookies: CookieJar,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
-    if let Some(_) = check_auth(cookies, None) {
-        return Err(StatusCode::UNAUTHORIZED);
     }
-
-    let mut rx = transmitter.1.subscribe();
-
-    let mut logs = vec![];
-    {
-        let mut state = STATE.lock().unwrap();
-            match &mut state.status {
-                MinecraftStatus::Starting { log, .. } => {
-                    for line in log {
-                        logs.push(line.clone());
-                    }
-                },
-                MinecraftStatus::Online { log, .. } => {
-                    let mut i = 0;
-                    for line in log.clone().iter().rev() {
-                        if i > 200 {
-                            break;
-                        }
-                        logs.push(line.clone());
-                        i+=1;
-                    }
-                },
-                _ => {},
-            };
-        }
-
-
-    let stream = async_stream::stream! {
-        for line in logs.iter().rev() {
-            yield Ok(Event::default().data(line));
-        }
-
-        while let Ok(msg) = rx.recv().await {
-            yield Ok(Event::default().data(msg));
-        }
-    };
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 fn check_auth(cookies: CookieJar, uri: Option<Uri>) -> Option<Response<Body>> {
@@ -746,7 +457,7 @@ fn check_auth(cookies: CookieJar, uri: Option<Uri>) -> Option<Response<Body>> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SharedData {
     status: String,
     status_colour: String,
@@ -774,19 +485,19 @@ fn create_status() -> String {
                 MinecraftStatus::Online { .. } => String::from("Online"),
                 MinecraftStatus::Crashed => String::from("Crashed!"),
                 MinecraftStatus::Offline => String::from("Offline"),
-                MinecraftStatus::Stopping => String::from("Stopping"),
+                MinecraftStatus::Stopping { .. } => String::from("Stopping"),
                 MinecraftStatus::Starting { .. } => String::from("Starting"),
             },
             status_colour: match state.status {
                 MinecraftStatus::Online { .. } => String::from("#2dcf58"),
                 MinecraftStatus::Crashed => String::from("#cf332d"),
                 MinecraftStatus::Offline => String::from("#4d4d4d"),
-                MinecraftStatus::Stopping => String::from("#d9a300"),
+                MinecraftStatus::Stopping { .. } => String::from("#d9a300"),
                 MinecraftStatus::Starting { .. } => String::from("#d9a300"),
             },
             status_online: match state.status {
                 MinecraftStatus::Online { .. } => true,
-                MinecraftStatus::Stopping => true,
+                MinecraftStatus::Stopping { .. } => true,
                 MinecraftStatus::Starting { .. } => true,
                 _ => false,
             },
@@ -804,9 +515,16 @@ fn create_status() -> String {
     out
 }
 
+static PREVIOUS_STATUS: Mutex<String> = Mutex::new(String::new());
+
 fn on_status_edited() {
-    println!("Sending status");
+    let mut state = PREVIOUS_STATUS.lock().unwrap();
     let sending = create_status();
+    if state.eq(&sending) {
+        return;
+    }
+    *state = sending.clone();
+    println!("Sending status");
     let state = STATE.lock().unwrap();
     if let Some(transmitter) = state.event_transmitter.get() {
         let _ = transmitter.send(sending.clone());

@@ -34,6 +34,17 @@ body {
     padding: 2rem;
 }
 
+select {
+    background: var(--bg);
+    border: solid 4px var(--border);
+    border-radius: 4px;
+    color: var(--text);
+}
+
+select:focus {
+    outline: 0;
+}
+
 .greenbutton {
     background-color: #04AA6D;
     border: none;
