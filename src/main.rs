@@ -1,5 +1,6 @@
 mod manage_server;
 mod get_info;
+mod mod_info;
 
 use axum::body::Body;
 use axum::http::header::SET_COOKIE;
@@ -114,6 +115,8 @@ async fn main() {
         fs::create_dir("manager").unwrap();
     }
 
+    mod_info::first_load().await;
+
     let mut max_players = -2;
 
     match fs::read_to_string("server.properties") {
@@ -176,6 +179,7 @@ async fn main() {
         .route("/api/read_log", post(get_info::api_read_log))
         .route("/api/log_line_count", post(get_info::api_log_line_count))
         .route("/api/all_logs", get(get_info::api_all_logs))
+        .route("/api/installed_mods", get(mod_info::api_installed_mods))
         .fallback_service(get(static_html))
         .with_state(transmitters.clone());
     include_bytes!("public/main.css");
@@ -356,7 +360,6 @@ struct WebhookRequest {
 
 async fn send_webhook(text: String) {
     if CONFIG.get().unwrap().manager_discord_webhook.is_empty() {
-        println!("E");
         return;
     }
     let client = reqwest::Client::new();

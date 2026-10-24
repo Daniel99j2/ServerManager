@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Mods</title>
+    <link rel="stylesheet" href="main.css">
+    <link rel="icon" type="image/x-icon" href="icon.svg">
+</head>
+<body customproperties withsidebar aligntop>
+<script src="main_data.js"></script>
+<script src="animate_late.js"></script>
+<h1>Mods</h1>
+<button class="greenbutton"><svgfrom src="download.svg"></svgfrom> Update All</button>
+<div style="height: auto; width: auto; border: solid 4px var(--border); border-radius: 4px; margin: 0" id="mod-holder">
+</div>
+</body>
+<script type="text/javascript">
+    async function reloadMods() {
+        const request = new XMLHttpRequest();
+        request.open("GET", "api/installed_mods");
+        request.onload = async function () {
+            if (request.status === 200) {
+                let mods = JSON.parse(request.response);
+                console.log(mods)
+                document.getElementById("mod-holder").replaceChildren();
+                for (let mod of mods) {
+                    add_mod(mod);
+                }
+            }
+        }
+        request.send();
+
+        //let mods = [{id: "lithium", name: "Lithium", file_name: "lithium-1.0.0.jar", needs_update: true, version: "1.0.0", icon: "https://cdn.modrinth.com/data/gvQqBUqZ/icon.png"}, {id: "carpet", name: "Carpet Mod", file_name: "fabric-carpet-latest.jar", needs_update: false, version: "1.2.0", icon: "https://cdn.modrinth.com/data/gvQqBUqZ/icon.png"}];
+    }
+
+    function add_mod(mod) {
+        let child = document.createElement("div");
+        child.style.height = "4em";
+        child.style.width = "80vw";
+        child.style.border = "solid 4px var(--border)";
+        child.style.borderRadius = "4px;";
+        child.style.display = "flex";
+        child.style.flexDirection = "row";
+        let pic = document.createElement("img");
+        pic.style = "width: auto; height: auto; padding: 10px";
+        if(mod.icon.length == 0) {
+            pic.src = "https://cdn.modrinth.com/data/7EyjyjZ4/277b2a129eace8bfcc8a49054db2108a7aacf97a.png";
+        } else pic.src = mod.icon;
+        child.appendChild(pic);
+        let nameVersion = document.createElement("div");
+        let h3 = document.createElement("h3");
+        h3.textContent = mod.name;
+        h3.style.margin = "0px";
+        nameVersion.style.padding = "10px";
+        nameVersion.style.maxWidth = "fit-content";
+        nameVersion.style.overflow = "clip";
+        nameVersion.appendChild(h3);
+        let version = document.createElement("p");
+        version.textContent = mod.version;
+        version.style.margin = "0px";
+        version.style.color = "grey";
+        version.style.whiteSpace = "nowrap";
+        nameVersion.appendChild(version);
+        let filenameAuthors = document.createElement("div");
+        filenameAuthors.style.marginTop = "auto";
+        filenameAuthors.style.marginBottom = "auto";
+        filenameAuthors.style.position = "sticky";
+        filenameAuthors.style.left = "40%";
+        let filename = document.createElement("p");
+        filename.textContent = mod.file_name;
+        filename.style.margin = "0px";
+        filename.style.color = "grey";
+        filename.style.whiteSpace = "nowrap";
+        filenameAuthors.appendChild(filename);
+        let authors = document.createElement("p");
+        authors.textContent = mod.authors;
+        authors.style.margin = "0px";
+        authors.style.color = "grey";
+        authors.style.whiteSpace = "nowrap";
+        filenameAuthors.appendChild(authors);
+
+        const temp = document.createElement("div");
+
+        if (mod.needs_update) {
+            temp.innerHTML = `<svgfrom src="download.svg"></svgfrom>`;
+        } else temp.innerHTML = `<svgfrom src="check.svg"></svgfrom>`;
+
+        const button = temp.firstElementChild;
+
+        button.style.color = "white";
+        button.style.position = "relative";
+        button.style.right = "10px";
+        button.style.marginLeft = "auto";
+        button.style.marginTop = "auto";
+        button.style.marginBottom = "auto";
+
+        if (mod.needs_update) {
+            button.style.background = "#00aa00";
+            button.onclick = () => {
+                console.log("Update!");
+            };
+        } else {
+            button.style.background = "grey";
+        }
+
+        button.style.outlineStyle = "solid";
+        button.style.borderRadius = "1px";
+
+        button.style.cursor = "pointer";
+
+        button.style.outlineColor = button.style.background;
+        button.style.outlineWidth = "4px";
+
+        child.appendChild(nameVersion);
+        child.appendChild(filenameAuthors);
+        child.appendChild(button);
+        document.getElementById("mod-holder").appendChild(child);
+    }
+
+    async function kill(event) {
+        const request = new XMLHttpRequest();
+        request.open("POST", "api/kill_server");
+        request.send();
+    }
+
+    for (let i = 0; i < 10; i++) {
+        add_mod({icon: "", hash: "", modrinth_info: null, name: "...", file_name: "..."});
+    }
+
+    reloadMods();
+</script>
+</html>

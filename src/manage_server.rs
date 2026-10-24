@@ -187,7 +187,6 @@ pub(crate) fn start_server() {
             tokio::select! { biased;
                 Some(_) = stop_rx.recv() => {
                     output.kill().await.expect("Failed to send KILL to the process!");
-                    println!("K");
                     break;
                 }
                 v = lines.next_line() => {

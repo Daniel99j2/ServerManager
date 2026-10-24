@@ -18,6 +18,10 @@ axum-extra = { version = "0.12.6", features = ["cookie"] }
 include_dir = "0.7.4"
 reqwest = "0.13.5"
 flate2 = "1.1.10"
+hex = "0.4.3"
+sha2 = "0.11.1"
+zip = "9.0.5"
+toml = "1.1.8+spec-1.1.0"
 
 [build-dependencies]
 build-print = "1.0.1"
