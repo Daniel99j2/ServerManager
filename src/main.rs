@@ -37,7 +37,9 @@ struct AppState {
     logs_transmitter: OnceLock<Sender<String>>,
     max_players: OnceLock<i32>,
     reboot_requested: bool,
-    last_crash: Option<Instant>
+    last_crash: Option<Instant>,
+    game_version: Option<String>,
+    loader_type: Option<String>
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -65,7 +67,9 @@ static STATE: Mutex<AppState> = Mutex::new(AppState {
     logs_transmitter: OnceLock::new(),
     max_players: OnceLock::new(),
     reboot_requested: false,
-    last_crash: None
+    last_crash: None,
+    game_version: None,
+    loader_type: None
 });
 
 const PAGES_DIR: IncludedDir = include_dir!("$CARGO_MANIFEST_DIR/src/gen/");
@@ -87,6 +91,10 @@ async fn main() {
         manager_discord_webhook: "".parse().unwrap(),
         anti_crash_loop_time_seconds: 180
     };
+
+    if !fs::exists("manager/").expect("Failed to get manager directory") {
+        fs::create_dir("manager/").expect("Failed to make manager directory");
+    }
 
     match fs::read_to_string("manager/config.json") {
         Ok(content) => match serde_json::from_str::<AppConfig>(&content) {
@@ -180,6 +188,8 @@ async fn main() {
         .route("/api/log_line_count", post(get_info::api_log_line_count))
         .route("/api/all_logs", get(get_info::api_all_logs))
         .route("/api/installed_mods", get(mod_info::api_installed_mods))
+        .route("/api/mod_updates", get(mod_info::api_get_updates))
+        .route("/api/mod_children", post(mod_info::api_child_mod))
         .fallback_service(get(static_html))
         .with_state(transmitters.clone());
     include_bytes!("public/main.css");
@@ -288,6 +298,14 @@ async fn main() {
                     send_webhook(send.to_string()).await;
                     println!("{}", send);
                     manage_server::start_server();
+                }
+                if !c.loader.contains("Unknown") {
+                    let mut state = STATE.lock().unwrap();
+                    state.loader_type = Some(c.loader.clone());
+                }
+                if !c.game_version.contains("Unknown") {
+                    let mut state = STATE.lock().unwrap();
+                    state.game_version = Some(c.game_version.clone());
                 }
             }
             Err(_) => {}
@@ -469,6 +487,8 @@ struct SharedData {
     players: Vec<String>,
     max_players: i32,
     tps: f32,
+    game_version: String,
+    loader: String
 }
 
 fn create_status() -> String {
@@ -512,6 +532,8 @@ fn create_status() -> String {
                 MinecraftStatus::Starting { .. } => 20.0, //So it doesnt show -1 when booting
                 _ => -1.0,
             },
+            game_version: state.game_version.clone().unwrap_or("Unknown".to_string()),
+            loader: state.loader_type.clone().unwrap_or("Unknown".to_string())
         })
         .unwrap();
     }

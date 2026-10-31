@@ -1,15 +1,17 @@
-use std::process::Stdio;
-use std::time::{Duration, Instant};
+use crate::{
+    CONFIG, MinecraftStatus, STATE, check_auth, on_status_edited, run_command, send_webhook,
+};
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use axum_extra::extract::CookieJar;
 use futures_util::StreamExt;
 use mc_rpc::{Client, ClientConfig};
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::sleep;
-use crate::{check_auth, STATE, MinecraftStatus, run_command, on_status_edited, CONFIG, send_webhook};
 
 pub(crate) async fn api_start(cookies: CookieJar) -> Response<Body> {
     if let Some(out) = check_auth(cookies, None) {
@@ -18,7 +20,7 @@ pub(crate) async fn api_start(cookies: CookieJar) -> Response<Body> {
     {
         let state = STATE.lock().unwrap();
         match state.status {
-            MinecraftStatus::Offline => {},
+            MinecraftStatus::Offline => {}
             MinecraftStatus::Crashed => {}
             _ => return (StatusCode::BAD_REQUEST, "Server already running").into_response(),
         }
@@ -39,7 +41,7 @@ pub(crate) async fn api_stop(cookies: CookieJar) -> Response<Body> {
         match &state.status {
             MinecraftStatus::Online { manager, .. } => manager.clone(),
             _ => {
-                return (StatusCode::BAD_REQUEST, "Server not running",).into_response();
+                return (StatusCode::BAD_REQUEST, "Server not running").into_response();
             }
         }
     };
@@ -57,11 +59,9 @@ pub(crate) async fn api_restart(cookies: CookieJar) -> Response<Body> {
         let mut state = STATE.lock().unwrap();
 
         let out = match &mut state.status {
-            MinecraftStatus::Online { manager, .. } => {
-                manager.clone()
-            },
+            MinecraftStatus::Online { manager, .. } => manager.clone(),
             _ => {
-                return (StatusCode::BAD_REQUEST, "Server not running",).into_response();
+                return (StatusCode::BAD_REQUEST, "Server not running").into_response();
             }
         };
         state.reboot_requested = true;
@@ -89,7 +89,7 @@ pub(crate) async fn api_kill(cookies: CookieJar) -> Response<Body> {
             MinecraftStatus::Stopping { stop_tx, .. } => stop_tx.clone(),
 
             _ => {
-                return (StatusCode::BAD_REQUEST, "Server not running",).into_response();
+                return (StatusCode::BAD_REQUEST, "Server not running").into_response();
             }
         }
     };
@@ -124,11 +124,7 @@ pub(crate) async fn api_send_command(cookies: CookieJar, payload: String) -> Res
         match &state.status {
             MinecraftStatus::Online { command_tx, .. } => command_tx.clone(),
             _ => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "Server not running",
-                )
-                    .into_response();
+                return (StatusCode::BAD_REQUEST, "Server not running").into_response();
             }
         }
     };
@@ -139,7 +135,6 @@ pub(crate) async fn api_send_command(cookies: CookieJar, payload: String) -> Res
         .expect("Couldn't send payload");
 
     println!("Running command {}", payload.clone());
-
 
     (StatusCode::OK, "").into_response()
 }
@@ -158,7 +153,10 @@ pub(crate) fn start_server() {
         let (stop_tx, mut stop_rx) = tokio::sync::mpsc::channel::<String>(1);
         {
             let mut state = STATE.lock().unwrap();
-            state.status = MinecraftStatus::Starting { stop_tx: stop_tx.clone(), log_line: 0 };
+            state.status = MinecraftStatus::Starting {
+                stop_tx: stop_tx.clone(),
+                log_line: 0,
+            };
             if let Some(transmitter) = state.logs_transmitter.get() {
                 let _ = transmitter.send("#### CLEAR MANAGER LOGS ####".to_string());
                 let _ = transmitter.send("#### MANAGER LOG LINE: 0 ####".to_string());
@@ -178,7 +176,10 @@ pub(crate) fn start_server() {
         tokio::spawn(async move {
             loop {
                 if let Some(command) = command_rx.recv().await {
-                    stdin.write_all(format!("{}\n", command).as_bytes()).await.expect("Failed to write command");
+                    stdin
+                        .write_all(format!("{}\n", command).as_bytes())
+                        .await
+                        .expect("Failed to write command");
                 }
             }
         });
@@ -193,9 +194,25 @@ pub(crate) fn start_server() {
                     if v.is_err() {
                         break;
                     }
-                    let line = v.unwrap().unwrap();
+                    let temp = v.unwrap();
+                    if temp.is_none() {
+                        break;
+                    }
+                    let line = temp.unwrap();
                                 if !line.contains("Named entity") && !line.contains("<") {
                 //This is fine even due to 'chat injections' as only mods can output at this time
+                    if !has_started && line.contains("[main/INFO]: Loading Minecraft ") {
+                    {
+                        let mut state = STATE.lock().unwrap();
+                        let mut version = line.split_at(line.find("[main/INFO]: Loading Minecraft ").unwrap() + "[main/INFO]: Loading Minecraft ".len()).1;
+                        if line.contains(" with Fabric Loader ") {
+                            state.loader_type = Some("fabric".to_string());
+                            version = version.split_at(version.find(" with Fabric Loader ").unwrap()).0;
+                        }
+                        state.game_version = Some(version.to_string());
+                    }
+                    on_status_edited();
+                }
                 if !has_started
                     && line.contains("Done (")
                     && line.ends_with(")! For help, type \"help\"")
@@ -309,18 +326,23 @@ pub(crate) fn start_server() {
                     }
                     return;
                 }
-                if line.eq("---- Minecraft Crash Report ----") || line.contains("[main/ERROR]: Failed to start the minecraft server") {
-                    let crashed_recently ;
+                let eula = line.contains("You need to agree to the EULA in order to run the server");
+                        if line.eq("---- Minecraft Crash Report ----") || line.contains("[main/ERROR]: Failed to start the minecraft server") || eula {
+                    let crashed_recently;
                     {
                         let mut state = STATE.lock().unwrap();
                         state.status = MinecraftStatus::Crashed;
                         crashed_recently =  state.last_crash.is_some() && state.last_crash.unwrap().elapsed().as_secs() < CONFIG.get().unwrap().anti_crash_loop_time_seconds;
                         state.last_crash = Some(Instant::now());
                     }
-                    on_status_edited();
+                            on_status_edited();
 
-                    if crashed_recently {
-                        let text;
+                            if eula {
+
+                            } else {
+
+                                if crashed_recently {
+                                    let text;
                         let value = CONFIG.get().unwrap().anti_crash_loop_time_seconds % 60;
                         if value % 30 == 0 {
                             text = format!("{} minutes", value / 60);
@@ -338,6 +360,7 @@ pub(crate) fn start_server() {
                         sleep(Duration::from_secs(10u64)).await;
                         start_server()
                     }
+                                }
 
                     return;
                 }

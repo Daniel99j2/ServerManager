@@ -6,7 +6,7 @@ fn main() {
     for i in fs::read_dir("src/public").expect("Couldnt read site files") {
         if i.is_ok() {
             let unwrapped = i.unwrap();
-            let path = unwrapped.path().into_string().unwrap().to_string();
+            let path = unwrapped.path().into_string().unwrap().to_string().replace("\\", "/");
             let mut contents = fs::read(unwrapped.path()).unwrap();
             if path.ends_with(".html") {
                 let mut c = str::from_utf8(&contents).unwrap_or("Error parsing").to_string();

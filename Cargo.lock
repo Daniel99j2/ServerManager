@@ -9,6 +9,7 @@ dependencies = [
  "async-stream",
  "axum",
  "axum-extra",
+ "base64 0.22.1",
  "build-print",
  "flate2",
  "futures-util",

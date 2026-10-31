@@ -63,3 +63,8 @@ for (let sidebar_item of document.getElementsByClassName("sidebaritem")) {
     }
     sidebar_item.style.cursor = "pointer"
 }
+
+document.addEventListener("status_update", (event) => {
+    document.getElementById("sidebar-status").style.backgroundColor = event.detail.status_colour;
+    document.getElementById("sidebar-status").style.borderColor = event.detail.status_colour;
+});

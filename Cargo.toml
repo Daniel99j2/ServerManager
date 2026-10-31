@@ -22,6 +22,7 @@ hex = "0.4.3"
 sha2 = "0.11.1"
 zip = "9.0.5"
 toml = "1.1.8+spec-1.1.0"
+base64 = "0.22.1"
 
 [build-dependencies]
 build-print = "1.0.1"

@@ -32,3 +32,22 @@ generalStream.onerror = (error) => {
     }));
     console.error("Error getting live updates:", error);
 };
+
+function createElement(data) {
+    const temp = document.createElement("div");
+    temp.innerHTML = data;
+    return temp.firstElementChild;
+}
+
+function replaceElement(element, data) {
+    let out = createElement(data);
+    element.parentElement.replaceChild(out, element);
+    return out;
+}
+
+function groupSvg(element) {
+    let html = element.innerHTML;
+    element.innerHTML = "<g></g>";
+    element.firstElementChild.innerHTML = html;
+    return element.firstElementChild;
+}

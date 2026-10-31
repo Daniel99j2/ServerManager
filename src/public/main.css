@@ -174,3 +174,30 @@ input::placeholder {
 #kill-server {
     background-color: #aa0404;
 }
+
+.spinner {
+    animation: spin 1s linear infinite;
+    transform-origin: 50% 50%;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.expand-child-mods {
+    color: white;
+    background: gray;
+    position: relative;
+    right: 10px;
+    margin-left: auto;
+    margin-top: auto;
+    margin-bottom: auto;
+    outline: solid 4px gray;
+    cursor: pointer;
+    border-radius: 1px;
+}

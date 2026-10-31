@@ -10,7 +10,7 @@
 <script src="main_data.js"></script>
 <script src="animate_late.js"></script>
 <h1>Mods</h1>
-<button class="greenbutton"><svgfrom src="download.svg"></svgfrom> Update All</button>
+<button class="greenbutton" onclick="update_all(event)"><svgfrom src="download.svg"></svgfrom> Update All</button>
 <div style="height: auto; width: auto; border: solid 4px var(--border); border-radius: 4px; margin: 0" id="mod-holder">
 </div>
 </body>
@@ -24,7 +24,7 @@
                 console.log(mods)
                 document.getElementById("mod-holder").replaceChildren();
                 for (let mod of mods) {
-                    add_mod(mod);
+                    add_mod(mod, null, 0);
                 }
             }
         }
@@ -33,7 +33,7 @@
         //let mods = [{id: "lithium", name: "Lithium", file_name: "lithium-1.0.0.jar", needs_update: true, version: "1.0.0", icon: "https://cdn.modrinth.com/data/gvQqBUqZ/icon.png"}, {id: "carpet", name: "Carpet Mod", file_name: "fabric-carpet-latest.jar", needs_update: false, version: "1.2.0", icon: "https://cdn.modrinth.com/data/gvQqBUqZ/icon.png"}];
     }
 
-    function add_mod(mod) {
+    function add_mod(mod, to, indent) {
         let child = document.createElement("div");
         child.style.height = "4em";
         child.style.width = "80vw";
@@ -41,6 +41,9 @@
         child.style.borderRadius = "4px;";
         child.style.display = "flex";
         child.style.flexDirection = "row";
+        let indent_element = document.createElement("h1");
+        indent_element.style.marginLeft = indent+"em";
+        child.appendChild(indent_element);
         let pic = document.createElement("img");
         pic.style = "width: auto; height: auto; padding: 10px";
         if(mod.icon.length == 0) {
@@ -79,13 +82,11 @@
         authors.style.whiteSpace = "nowrap";
         filenameAuthors.appendChild(authors);
 
-        const temp = document.createElement("div");
+        let button;
 
         if (mod.needs_update) {
-            temp.innerHTML = `<svgfrom src="download.svg"></svgfrom>`;
-        } else temp.innerHTML = `<svgfrom src="check.svg"></svgfrom>`;
-
-        const button = temp.firstElementChild;
+            button = createElement(`<svgfrom src="download.svg"></svgfrom>`);
+        } else button = createElement(`<svgfrom src="check.svg"></svgfrom>`);
 
         button.style.color = "white";
         button.style.position = "relative";
@@ -113,18 +114,72 @@
 
         child.appendChild(nameVersion);
         child.appendChild(filenameAuthors);
+        if(mod.children.length > 0) {
+            let expand = createElement(`<svgfrom src="chevron-left.svg"></svgfrom>`);
+
+            expand.classList.add("expand-child-mods");
+            expand.title = "This mod has embedded jars. Click to expand.";
+
+            let my_children = [];
+
+            let hide;
+            let open = async function () {
+                expand = replaceElement(expand, `<svgfrom src="loader.svg"></svgfrom>`);
+                groupSvg(expand).classList.add("spinner");
+                expand.title = "Loading...";
+                expand.style.cursor = "not-allowed";
+                expand.style.filter = "brightness(0.7)";
+                expand.classList.add("expand-child-mods");
+                const request = new XMLHttpRequest();
+                request.open("POST", "api/mod_children");
+                request.onload = async function () {
+                    if (request.status === 200) {
+                        let mods = JSON.parse(request.response);
+                        console.log(mods)
+                        for (let mod of mods) {
+                            my_children.push(add_mod(mod, child, indent+1));
+                        }
+                        expand = replaceElement(expand, `<svgfrom src="chevron-down.svg"></svgfrom>`);
+                        expand.title = "This mod has embedded jars. Click to hide.";
+                        expand.onclick = hide;
+                        expand.classList.add("expand-child-mods");
+                    } else hide();
+                }
+                request.onerror = async function () {
+                    hide();
+                }
+                request.send(mod.hash);
+            };
+            hide = async function () {
+                expand = replaceElement(expand, `<svgfrom src="chevron-left.svg"></svgfrom>`);
+                expand.classList.add("expand-child-mods");
+                expand.title = "This mod has embedded jars. Click to expand.";
+                for (let c of my_children) {
+                    c.parentElement.removeChild(c);
+                }
+                my_children = [];
+                expand.onclick = open;
+            };
+            expand.onclick = open;
+
+            button.style.marginLeft = "1em";
+            child.appendChild(expand);
+        }
         child.appendChild(button);
-        document.getElementById("mod-holder").appendChild(child);
+        if(to != null) to.after(child);
+        else document.getElementById("mod-holder").appendChild(child);
+
+        return child;
     }
 
-    async function kill(event) {
+    async function update_all(event) {
         const request = new XMLHttpRequest();
-        request.open("POST", "api/kill_server");
+        request.open("GET", "api/mod_updates");
         request.send();
     }
 
     for (let i = 0; i < 10; i++) {
-        add_mod({icon: "", hash: "", modrinth_info: null, name: "...", file_name: "..."});
+        add_mod({icon: "", hash: "", modrinth_info: null, name: "...", file_name: "...", children: []}, null);
     }
 
     reloadMods();
