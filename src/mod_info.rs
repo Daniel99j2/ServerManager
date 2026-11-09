@@ -1,4 +1,4 @@
-use crate::check_auth;
+use crate::{check_auth, STATE};
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
@@ -13,6 +13,7 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
+use axum::Json;
 use zip::ZipArchive;
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -41,12 +42,18 @@ pub(crate) async fn api_installed_mods(cookies: CookieJar) -> Response<Body> {
     let mutex2 = MOD_CACHE.lock().unwrap();
 
     let mut mods = vec![];
+    let mut duplicate_check = vec![];
+    let mut duplicate_names = vec![];
 
     for x in mutex.iter() {
+        if duplicate_check.contains(x) {
+            duplicate_names.push(x.clone());
+        }
+        duplicate_check.push(x.clone());
         mods.push(mutex2.get(x).unwrap());
     }
 
-    (StatusCode::OK, serde_json::to_string_pretty(&mods).unwrap()).into_response()
+    (StatusCode::OK, serde_json::to_string_pretty(&(mods, duplicate_names)).unwrap()).into_response()
 }
 
 pub(crate) async fn api_child_mod(cookies: CookieJar, payload: String) -> Response<Body> {
@@ -186,13 +193,10 @@ pub(crate) async fn api_get_updates(cookies: CookieJar) -> Response<Body> {
         let mutex2 = MOD_CACHE.lock().unwrap();
         for x in mutex.iter() {
             if mutex2.get(x).unwrap().modrinth_info.is_some() {
-                println!("Modrinth info found {}", x.clone());
                 mods.push(x.clone());
             }
         }
     }
-
-    let mut out = vec![];
 
     let all1 = get_updates_from_hashes(mods).await;
     let all;
@@ -202,16 +206,89 @@ pub(crate) async fn api_get_updates(cookies: CookieJar) -> Response<Body> {
         return (StatusCode::GATEWAY_TIMEOUT, "Failed to get from modrinth API").into_response();
     }
 
-    for x in all.iter() {
-        out.push(x.1);
+    (StatusCode::OK, serde_json::to_string_pretty(&all).unwrap()).into_response()
+}
+
+//TODO: Warning on mods page if multiple have same hash
+#[derive(Deserialize)]
+pub(crate) struct UpdateModPayload {
+    hash: String,
+    file: UpdateFile
+}
+
+pub(crate) async fn api_update_mods(cookies: CookieJar, Json(payload): Json<Vec<UpdateModPayload>>) -> Response<Body> {
+    if let Some(out) = check_auth(cookies, None) {
+        return out;
+    }
+    let mut handles = vec![];
+
+    for x in payload {
+        handles.push(tokio::spawn(update_mod(x.hash, x.file.url, x.file.filename)));
     }
 
-    (StatusCode::OK, serde_json::to_string_pretty(&out).unwrap()).into_response()
+    for handle in handles {
+        match handle.await {
+            Ok(_) => {},
+            Err(e) => eprintln!("Task panicked: {:?}", e),
+        }
+    }
+    (StatusCode::OK, "Updated mods").into_response()
+}
+
+async fn update_mod(hash: String, url: String, new_name: String) {
+    let client = reqwest::Client::new();
+    let out = client.get(url).send().await;
+    match out {
+        Ok(info) => {
+            if info.status() == StatusCode::OK {
+                let body = info.bytes().await.unwrap();
+                match get_file_name_from_hash(hash).await {
+                    None => {
+                        println!("Failed to find file from hash");
+                    }
+                    Some(v) => {
+                        dbg!("NAME: {}", &v);
+                        fs::remove_file(format!("./mods/{}", v)).expect("Failed to delete mod");
+                        fs::write(format!("./mods/{}", new_name), body).expect("Failed to write mod");
+                    }
+                };
+            } else {
+                println!("Failed get updated file, {}", info.status());
+            }
+        }
+        Err(_) => {
+            println!("Failed get updated file");
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct SavedModCache {
     cache: Vec<ModInfo>
+}
+
+async fn get_file_name_from_hash(hash: String) -> Option<String> {
+    {
+        let mutex = MOD_CACHE.lock().unwrap();
+        if let Some(v) = mutex.get(&hash) {
+            match File::open(format!("./mods/{}", v.file_name.clone())) {
+                Ok(f) => {
+                    match hash_file(f) {
+                        Ok(_) => {
+                            return Some(v.file_name.clone());
+                        }
+                        Err(_) => {
+                            dbg!("Hash didnt match for {}", &v.file_name);
+                        }
+                    }
+                }
+                Err(_) => {
+                    dbg!("Didnt find the mod with it's previous name as {}", &v.file_name);
+                }
+            }
+        }
+    }
+    None
 }
 
 pub(crate) async fn first_load() {
@@ -300,6 +377,14 @@ async fn load_mod(x: DirEntry) {
                 {
                     let mut mutex2 = MOD_CACHE.lock().unwrap();
                     mutex2.insert(v, val);
+                }
+            } else {
+                let mut mutex2 = MOD_CACHE.lock().unwrap();
+                let name = path_string.split('/').last().unwrap().to_string();
+                let val = mutex2.get_mut(&v).unwrap();
+                if !val.file_name.eq(&name.clone()) {
+                    println!("Mod {} changed file name from {} to {}", val.name, val.file_name, name);
+                    val.file_name = name.clone();
                 }
             }
         }
@@ -495,7 +580,7 @@ struct ModrinthProjectInfo {
     id: String,
     team: String,
     title: String,
-    description: String,
+    //description: String,
     body: String,
     project_type: String,
     categories: Vec<String>,
@@ -503,7 +588,7 @@ struct ModrinthProjectInfo {
     environment: Vec<String>,
     game_versions: Vec<String>,
     loaders: Vec<String>,
-    versions: Vec<String>,
+    //versions: Vec<String>,
     downloads: usize,
     icon_url: Option<String>,
 }
@@ -532,26 +617,27 @@ async fn hash_info(hash: String) -> Option<ModrinthProjectInfo> {
     None
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct FileHashes {
     sha512: String
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct UpdateFile {
     hashes: FileHashes,
     url: String,
     filename: String,
-    primary: String,
+    primary: bool
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct ModToUpdate {
     name: String,
     version_number: String,
-    changelog: String,
+    //changelog: String,
     version_type: String,
-    files: Vec<UpdateFile>
+    files: Vec<UpdateFile>,
+    recent_update: Option<UpdateFile>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -562,29 +648,74 @@ struct GetUpdatesBody {
     game_versions: Vec<String>,
 }
 
-
 async fn get_updates_from_hashes(hashes: Vec<String>) -> Option<HashMap<String, ModToUpdate>> {
     let client = reqwest::Client::new();
+
+    let loader;
+    let version;
+    {
+        let mutex = STATE.lock().unwrap();
+        loader = match mutex.loader_type.clone() {
+            None => {
+                return None;
+            }
+            Some(v) => {
+                v
+            }
+        };
+        version = match mutex.game_version.clone() {
+            None => {
+                return None;
+            }
+            Some(v) => {
+                v
+            }
+        };
+    }
 
     let body = GetUpdatesBody{
         hashes,
         algorithm: "sha512".to_string(),
-        loaders: vec![
-            "fabric".to_string(),
-        ],
-        game_versions: vec![
-            "26.3".to_string(),
-        ],
+        loaders: vec![loader],
+        game_versions: vec![version],
     };
 
-    let out = client.post("https://api.modrinth.com/v2/version_files/update/".to_string()).body(serde_json::to_string(&body).unwrap()).send().await;
+    let out = client.post("https://api.modrinth.com/v2/version_files/update".to_string()).json(&serde_json::json!(&body)).send().await;
     match out {
         Ok(info) => {
             if info.status() == StatusCode::OK {
                 let body = info.text().await.unwrap();
-                return Some(serde_json::from_str::<HashMap<String, ModToUpdate>>(&body).unwrap());
+                return Some(match serde_json::from_str::<HashMap<String, ModToUpdate>>(&body) {
+                    Ok(v) => {
+                        let mut out = HashMap::<>::new();
+                        for both in v {
+                            let mut mod_to_update = both.1.clone();
+                            if mod_to_update.files.len() == 1 {
+                                mod_to_update.recent_update = Some(mod_to_update.files.get(0).unwrap().clone());
+                            } else {
+                                for f in &mod_to_update.files {
+                                    if f.primary {
+                                        mod_to_update.recent_update = Some(f.clone());
+                                        break;
+                                    }
+                                }
+                            }
+                            if mod_to_update.recent_update.is_some() {
+                                let u = mod_to_update.recent_update.as_ref().unwrap();
+                                if !INSTALLED_MODS.lock().unwrap().contains(&u.hashes.sha512) {
+                                    out.insert(both.0, mod_to_update);
+                                }
+                            }
+                        }
+                        out
+                    }
+                    Err(_) => {
+                        return None;
+                    }
+                });
             } else {
                 println!("Failed to get updates, {}", info.status());
+                println!("{}", info.text().await.unwrap_or("No reason".to_string()));
             }
         }
         Err(_) => {

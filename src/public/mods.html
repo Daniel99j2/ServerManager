@@ -10,7 +10,11 @@
 <script src="main_data.js"></script>
 <script src="animate_late.js"></script>
 <h1>Mods</h1>
-<button class="greenbutton" onclick="update_all(event)"><svgfrom src="download.svg"></svgfrom> Update All</button>
+<div style="display: flex; flex-direction: row">
+    <button class="greenbutton" onclick="get_updates(event)"><svgfrom src="refresh-cw.svg"></svgfrom> Check for updates</button>
+    <button class="greenbutton" onclick="update_all(event)" disabled id="update-all"><svgfrom src="download.svg"></svgfrom> Update All</button>
+    <button class="greenbutton" onclick="install_mods(event)"><svgfrom src="download.svg"></svgfrom> Install mods...</button>
+</div>
 <div style="height: auto; width: auto; border: solid 4px var(--border); border-radius: 4px; margin: 0" id="mod-holder">
 </div>
 </body>
@@ -20,11 +24,42 @@
         request.open("GET", "api/installed_mods");
         request.onload = async function () {
             if (request.status === 200) {
-                let mods = JSON.parse(request.response);
+                let val = JSON.parse(request.response);
+                let mods = val[0];
                 console.log(mods)
                 document.getElementById("mod-holder").replaceChildren();
                 for (let mod of mods) {
                     add_mod(mod, null, 0);
+                }
+                let already_done = [];
+                for (let duplicate of val[1]) {
+                    if(already_done.includes(duplicate)) {
+                        continue;
+                    }
+                    already_done.push(duplicate);
+                    let child = document.createElement("div");
+                    child.classList.add("mod-list-element");
+                    child.style.borderColor = "#ffa600";
+                    child.style.backgroundColor = "#806600";
+                    child.style.flexDirection = "column";
+                    child.style.marginBottom = "5px";
+                    child.style.justifyContent = "center";
+                    let header = document.createElement("h3");
+                    header.style.margin = "0px";
+                    header.textContent = "Warning: Duplicate mods";
+                    let text = document.createElement("p");
+                    text.style.margin = "0px";
+                    let mod_name = "Unknown";
+                    for (let mod of mods) {
+                        if(mod.hash === duplicate) {
+                            mod_name = mod.name;
+                            break;
+                        }
+                    }
+                    text.textContent = "Mod '"+mod_name+"' is duplicated and may cause problems!";
+                    child.appendChild(header);
+                    child.appendChild(text);
+                    document.getElementById("mod-holder").prepend(child);
                 }
             }
         }
@@ -35,12 +70,8 @@
 
     function add_mod(mod, to, indent) {
         let child = document.createElement("div");
-        child.style.height = "4em";
-        child.style.width = "80vw";
-        child.style.border = "solid 4px var(--border)";
-        child.style.borderRadius = "4px;";
-        child.style.display = "flex";
-        child.style.flexDirection = "row";
+        child.id = "mod_"+mod.hash+"_"+indent;
+        child.classList.add("mod-list-element");
         let indent_element = document.createElement("h1");
         indent_element.style.marginLeft = indent+"em";
         child.appendChild(indent_element);
@@ -82,35 +113,8 @@
         authors.style.whiteSpace = "nowrap";
         filenameAuthors.appendChild(authors);
 
-        let button;
-
-        if (mod.needs_update) {
-            button = createElement(`<svgfrom src="download.svg"></svgfrom>`);
-        } else button = createElement(`<svgfrom src="check.svg"></svgfrom>`);
-
-        button.style.color = "white";
-        button.style.position = "relative";
-        button.style.right = "10px";
-        button.style.marginLeft = "auto";
-        button.style.marginTop = "auto";
-        button.style.marginBottom = "auto";
-
-        if (mod.needs_update) {
-            button.style.background = "#00aa00";
-            button.onclick = () => {
-                console.log("Update!");
-            };
-        } else {
-            button.style.background = "grey";
-        }
-
-        button.style.outlineStyle = "solid";
-        button.style.borderRadius = "1px";
-
-        button.style.cursor = "pointer";
-
-        button.style.outlineColor = button.style.background;
-        button.style.outlineWidth = "4px";
+        let button = createElement(`<svgfrom src="check.svg"></svgfrom>`);
+        button.classList.add("update_button");
 
         child.appendChild(nameVersion);
         child.appendChild(filenameAuthors);
@@ -162,6 +166,13 @@
             };
             expand.onclick = open;
 
+            if(indent !== 0) {
+                expand.onclick = null;
+                expand.style.cursor = "not-allowed";
+                expand.style.filter = "brightness(0.7)";
+                expand.title = "You cannot see embedded jars in a embedded jar.";
+            }
+
             button.style.marginLeft = "1em";
             child.appendChild(expand);
         }
@@ -174,7 +185,58 @@
 
     async function update_all(event) {
         const request = new XMLHttpRequest();
+        request.open("POST", "api/update_mods");
+        request.setRequestHeader("Content-Type", "application/json");
+        request.send(JSON.stringify(needs_update));
+        request.onload = async function () {
+            await reloadMods();
+        }
+    }
+
+    async function install_mods(event) {
+        window.location.assign("add_mods");
+    }
+
+    let needs_update = [];
+
+    async function get_updates(event) {
+        const request = new XMLHttpRequest();
         request.open("GET", "api/mod_updates");
+        request.onload = async function () {
+            if (request.status === 200) {
+                needs_update = [];
+                let to_update = JSON.parse(request.response);
+                document.getElementById("update-all").disabled = to_update.length === 0;
+                for (const [hash, mod] of Object.entries(to_update)) {
+                    console.log("mod_"+hash+"_0");
+                    console.log(mod);
+                    let holder = document.getElementById("mod_"+hash+"_0");
+                    let update_button = holder.querySelectorAll(".update_button")[0];
+                    update_button = replaceElement(update_button, `<svgfrom src="download.svg"></svgfrom>`);
+                    update_button.style.background = "#00aa00";
+                    let data = {
+                        hash: hash,
+                        file: mod.recent_update
+                    };
+                    update_button.onclick = async function () {
+                        const request = new XMLHttpRequest();
+                        request.open("POST", "api/update_mods");
+                        request.setRequestHeader("Content-Type", "application/json");
+                        request.send(JSON.stringify([data]));
+                        request.onload = async function () {
+                            await reloadMods();
+                        }
+                    };
+                    needs_update.push(data);
+                    update_button.classList.add("update_button");
+                    update_button.style.background = "#04AA6D";
+                    update_button.style.outlineColor = "#04AA6D";
+                    if(holder.querySelectorAll(".expand-child-mods").length > 0) {
+                        update_button.style.marginLeft = "1em";
+                    }
+                }
+            }
+        }
         request.send();
     }
 

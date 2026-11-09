@@ -190,6 +190,8 @@ async fn main() {
         .route("/api/installed_mods", get(mod_info::api_installed_mods))
         .route("/api/mod_updates", get(mod_info::api_get_updates))
         .route("/api/mod_children", post(mod_info::api_child_mod))
+        .route("/api/update_mods", post(mod_info::api_update_mods))
+        .route("/api/search_info", get(get_info::api_search_info))
         .fallback_service(get(static_html))
         .with_state(transmitters.clone());
     include_bytes!("public/main.css");
@@ -334,6 +336,9 @@ async fn static_html(cookies: CookieJar, req: Request<Body>) -> Response<Body> {
     }
     if path.ends_with(".svg") {
         content_type = "image/svg+xml";
+    }
+    if path.ends_with(".js") {
+        content_type = "text/javascript";
     }
 
     if PAGES_DIR.contains(path.clone()) {

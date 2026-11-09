@@ -175,6 +175,20 @@ input::placeholder {
     background-color: #aa0404;
 }
 
+#kill-server:disabled,
+#kill-server[disabled] {
+    background-color: #5d0202;
+    color: gray;
+    cursor: not-allowed;
+}
+
+.utility-button:disabled,
+.utility-button[disabled] {
+    background-color: #3c5f9a;
+    color: gray;
+    cursor: not-allowed;
+}
+
 .spinner {
     animation: spin 1s linear infinite;
     transform-origin: 50% 50%;
@@ -200,4 +214,26 @@ input::placeholder {
     outline: solid 4px gray;
     cursor: pointer;
     border-radius: 1px;
+}
+
+.mod-list-element {
+    height: 4em;
+    width: 80vw;
+    border: solid 4px var(--border);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: row;
+}
+
+.update_button {
+    color: white;
+    position: relative;
+    right: 10px;
+    margin-left: auto;
+    margin-top: auto;
+    margin-bottom: auto;
+    background: grey;
+    outline: solid 4px grey;
+    border-radius: 1px;
+    cursor: pointer;
 }

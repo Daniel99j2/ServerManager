@@ -15,12 +15,28 @@
         document.getElementById("current-status-circle").style["outline-color"] = event.detail.status_colour;
         document.getElementById("current-status").textContent = event.detail.status;
         if (event.detail.status_online) {
+            document.getElementById("kill-server").disabled = false;
+            document.getElementById("reboot-server").disabled = true;
+            document.getElementById("start-stop").disabled = true;
             document.getElementById("start-stop").className = "redbutton"
-            document.getElementById("start-stop").innerHTML = '<svgfrom src="stop.svg"></svgfrom> Stop'
+            if(event.detail.status === "Starting") {
+                document.getElementById("start-stop").innerHTML = '<svgfrom src="loader.svg"></svgfrom> Starting';
+                document.getElementById("start-stop").firstElementChild.classList.add("spinner");
+            } else if(event.detail.status === "Stopping") {
+                document.getElementById("start-stop").innerHTML = '<svgfrom src="loader.svg"></svgfrom> Stopping';
+                document.getElementById("start-stop").firstElementChild.classList.add("spinner");
+            } else {
+                document.getElementById("reboot-server").disabled = false;
+                document.getElementById("start-stop").disabled = false;
+                document.getElementById("start-stop").innerHTML = '<svgfrom src="stop.svg"></svgfrom> Stop'
+            }
             let tps = event.detail.tps.toFixed(1);
             if(tps === "-500.0") tps = "???";
             document.getElementById("status-text").innerHTML = '<svgfrom src="users.svg"></svgfrom> '+event.detail.players_online+'/'+event.detail.max_players+'　•　 <svgfrom src="gauge.svg"></svgfrom> '+tps;
         } else {
+            document.getElementById("kill-server").disabled = true;
+            document.getElementById("reboot-server").disabled = true;
+            document.getElementById("start-stop").disabled = false;
             document.getElementById("start-stop").className = "greenbutton"
             document.getElementById("start-stop").innerHTML = '<svgfrom src="power.svg"></svgfrom> Start'
             document.getElementById("status-text").innerHTML = '-';
@@ -57,7 +73,7 @@
         <p style="text-align: center; height: 1em" id="status-text"></p>
         <div style="display: flex; flex-direction: row">
             <button class="greybutton" id="start-stop" onclick="startStop()" style="width: 120px;">Start</button>
-            <button class="utility-button" onclick="reboot()"><svgfrom src="refresh-cw.svg"></svgfrom></button>
+            <button class="utility-button" onclick="reboot()" id="reboot-server"><svgfrom src="refresh-cw.svg" id="reboot-svg"></svgfrom></button>
             <button class="utility-button" onclick="kill()" id="kill-server"><svgfrom src="skull.svg"></svgfrom></button>
         </div>
     </div>

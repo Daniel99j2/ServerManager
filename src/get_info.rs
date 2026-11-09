@@ -11,7 +11,7 @@ use axum::response::sse::{Event, KeepAlive};
 use axum_extra::extract::CookieJar;
 use flate2::read::GzDecoder;
 use futures_util::Stream;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::Sender;
 use crate::{check_auth, create_status, safe_file, STATE, MinecraftStatus};
 
@@ -24,6 +24,18 @@ pub(crate) struct ReadLogPayload {
 
 pub(crate) async fn api_read_log(cookies: CookieJar, Json(payload): Json<ReadLogPayload>) -> Response<Body> {
     log_out(cookies, payload, false).await
+}
+
+pub(crate) async fn api_search_info(cookies: CookieJar) -> Response<Body> {
+    if let Some(out) = check_auth(cookies, None) {
+        return out;
+    }
+    let out;
+    {
+        let state = STATE.lock().unwrap();
+        out = format!("{},{}", state.game_version.clone().unwrap_or("Unknown".parse().unwrap()), state.loader_type.clone().unwrap_or("Unknown".parse().unwrap()))
+    }
+    (StatusCode::OK, out).into_response()
 }
 
 pub(crate) async fn api_all_logs(cookies: CookieJar) -> Response<Body> {

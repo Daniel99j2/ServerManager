@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Install Mods</title>
+    <link rel="stylesheet" href="main.css">
+    <link rel="icon" type="image/x-icon" href="icon.svg">
+</head>
+<body customproperties withsidebar aligntop>
+<script src="main_data.js"></script>
+<script src="animate_late.js"></script>
+<h1>Install Mods</h1>
+<form onsubmit="search(event)">
+    <label>
+        <input type="text" placeholder="Search..." id="search-box">
+    </label>
+</form>
+<div id="categories" style="position: absolute; left: 0; top: 10px"></div>
+<div style="height: auto; width: auto; border: solid 4px var(--border); border-radius: 4px; margin: 0" id="mod-holder">
+</div>
+</body>
+<script type="text/javascript">
+    async function search(event) {
+        if(event != null) event.preventDefault();
+        document.getElementById("mod-holder").replaceChildren();
+        const url = new URL('https://api.modrinth.com/v2/search');
+        const params = new URLSearchParams({
+            query: document.getElementById("search-box").value,
+            facets: `[["categories:LOADER"],["versions:VERSION"],["project_type:mod"]]`.replace("LOADER", loader).replace("VERSION", game_version)
+        });
+        url.search = params.toString();
+
+        const request = new XMLHttpRequest();
+        request.open("GET", url);
+        request.onload = async function () {
+            if (request.status === 200) {
+                let response = JSON.parse(request.response);
+                for (const result of response.hits) {
+                    add_mod(result);
+                }
+            }
+        };
+        request.send();
+    }
+
+    function add_mod(result) {
+        let child = document.createElement("div");
+        child.classList.add("mod-list-element");
+        child.style.cursor = "pointer";
+        child.onclick = async function (event) {
+            if(event.target.onclick == null || event.target === child) {
+                window.open('https://modrinth.com/mod/'+result.project_id, '_blank');
+            }
+        };
+        let pic = document.createElement("img");
+        pic.style = "width: auto; height: auto; padding: 10px";
+        pic.src = result.icon_url;
+        child.appendChild(pic);
+        let nameVersion = document.createElement("div");
+        let h3 = document.createElement("h3");
+        child.onmouseenter = async function () {
+            h3.style.textDecoration = "underline";
+        };
+        child.onmouseleave = async function () {
+            h3.style.textDecoration = "";
+        };
+        h3.textContent = result.title;
+        h3.style.margin = "0px";
+        nameVersion.style.padding = "10px";
+        nameVersion.style.minWidth = "0";
+        nameVersion.style.overflow = "clip";
+        nameVersion.style.flexGrow = "1";
+        nameVersion.appendChild(h3);
+        let desc = document.createElement("p");
+        desc.textContent = result.description;
+        desc.style.overflow = "hidden";
+        desc.style.textOverflow = "ellipsis";
+        desc.style.margin = "0px";
+        desc.style.color = "grey";
+        desc.style.whiteSpace = "nowrap";
+        nameVersion.appendChild(desc);
+        let downloadsHeartsTime = document.createElement("div");
+        downloadsHeartsTime.style.marginTop = "auto";
+        downloadsHeartsTime.style.marginBottom = "auto";
+        downloadsHeartsTime.style.position = "sticky";
+        downloadsHeartsTime.style.left = "40%";
+        let downloadsHearts = document.createElement("p");
+        const formatter = new Intl.NumberFormat('en-US', {
+            notation: 'compact',
+            maximumFractionDigits: 2
+        });
+        downloadsHearts.innerHTML = `<svgfrom src="download.svg"></svgfrom> `+formatter.format(result.downloads)+` <svgfrom src="heart.svg"></svgfrom> `+formatter.format(result.follows);
+        downloadsHearts.style.margin = "0px";
+        downloadsHearts.style.color = "grey";
+        downloadsHearts.style.whiteSpace = "nowrap";
+        downloadsHeartsTime.appendChild(downloadsHearts);
+        let changeTime = document.createElement("p");
+        changeTime.innerHTML = `<svgfrom src="clock-fading.svg"></svgfrom> `+getRelativeTimeString(result.date_modified);
+        changeTime.style.margin = "0px";
+        changeTime.style.color = "grey";
+        changeTime.style.whiteSpace = "nowrap";
+        changeTime.style.textAlign = "right";
+        downloadsHeartsTime.appendChild(changeTime);
+
+        let button = createElement(`<svgfrom src="download.svg"></svgfrom>`);
+        button.classList.add("update_button");
+        button.onclick = async function () {
+            console.log("A");
+        };
+        button.style.background = "#04AA6D";
+        button.style.outlineColor = "#04AA6D";
+        button.style.maxWidth = "1em";
+        button.style.minWidth = "1em";
+        button.style.marginLeft = "2em";
+
+        child.appendChild(nameVersion);
+        child.appendChild(downloadsHeartsTime);
+        child.appendChild(button);
+        document.getElementById("mod-holder").appendChild(child);
+
+        return child;
+    }
+
+    let game_version = "";
+    let loader = "";
+
+    async function load() {
+        const request1 = new XMLHttpRequest();
+        request1.open("GET", "api/search_info");
+        request1.onload = async function () {
+            if (request1.status === 200) {
+                game_version = request1.response.split(",")[0];
+                loader = request1.response.split(",")[1];
+                await doTheRestOfLoad();
+            }
+        }
+        request1.send();
+    }
+
+    async function doTheRestOfLoad() {
+        const request = new XMLHttpRequest();
+        request.open("GET", "https://api.modrinth.com/v2/tag/category");
+        request.onload = async function () {
+            if (request.status === 200) {
+                let categories = JSON.parse(request.response);
+                for (const category of categories) {
+                    console.log(category);
+                    if(category.project_type === "mod") {
+                        let v = document.createElement('p');
+                        v.style.margin = "2px";
+                        v.textContent = (" "+category.name).replace("-", " ").split(" ")
+                            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                            .join(" ");
+                        let icon = createElement(category.icon);
+                        icon.style.width = "auto";
+                        icon.style.height = "1em";
+                        icon.style.verticalAlign = "-0.125em";
+                        v.prepend(icon);
+                        document.getElementById("categories").appendChild(v);
+                    }
+                }
+            }
+        };
+        request.send();
+
+        await search(null);
+    }
+
+    load();
+</script>
+</html>
