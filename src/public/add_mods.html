@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Install Mods</title>
     <link rel="stylesheet" href="main.css">
-    <link rel="icon" type="image/x-icon" href="icon.svg">
+    <link rel="icon" type="image/x-icon" href="icons/icon.svg">
 </head>
 <body customproperties withsidebar aligntop>
 <script src="main_data.js"></script>
@@ -54,6 +54,7 @@
         };
         let pic = document.createElement("img");
         pic.style = "width: auto; height: auto; padding: 10px";
+        pic.style.imageRendering = "pixelated";
         pic.src = result.icon_url;
         child.appendChild(pic);
         let nameVersion = document.createElement("div");

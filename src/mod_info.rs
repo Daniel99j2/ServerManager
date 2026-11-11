@@ -1,4 +1,4 @@
-use crate::{check_auth, STATE};
+use crate::{check_auth, STATE, get_info};
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
@@ -143,7 +143,7 @@ async fn load_children(name: String, children: Vec<String>) -> Option<Vec<ModInf
                             output_file.sync_all().expect("Failed to sync temp file");
                         }
                         let output_file = File::open(path.clone()).expect("Failed to create temp file");
-                        let hash = hash_file(output_file);
+                        let hash = get_info::hash_file(output_file);
                         match hash {
                             Ok(v) => {
                                 let contains;
@@ -273,7 +273,7 @@ async fn get_file_name_from_hash(hash: String) -> Option<String> {
         if let Some(v) = mutex.get(&hash) {
             match File::open(format!("./mods/{}", v.file_name.clone())) {
                 Ok(f) => {
-                    match hash_file(f) {
+                    match get_info::hash_file(f) {
                         Ok(_) => {
                             return Some(v.file_name.clone());
                         }
@@ -362,7 +362,7 @@ async fn load_mod(x: DirEntry) {
     }
     println!("Loading mod {}", &path_string);
     let file  = File::open(Path::new(path_string.to_string().as_str()));
-    let hash = hash_file(file.unwrap());
+    let hash = get_info::hash_file(file.unwrap());
     match hash {
         Ok(v) => {
             let contains;
@@ -507,7 +507,7 @@ async fn read(name: String, real_name: Option<String>) -> ModInfo {
 
     let mut modrinth_info: Option<ModrinthProjectInfo> = None;
     let mut info = ModInfo {
-        hash: match hash_file(File::open(&name).unwrap()) {
+        hash: match get_info::hash_file(File::open(&name).unwrap()) {
             Ok(b) => {
                 modrinth_info = hash_info(b.clone()).await;
                 b
@@ -546,24 +546,6 @@ async fn read(name: String, real_name: Option<String>) -> ModInfo {
         }
     }
     info
-}
-
-fn hash_file(mut file: File) -> io::Result<String> {
-    println!("Start");
-    let mut hasher = Sha512::new();
-    let mut buffer: [u8; 8192] = [0; 8192];
-
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-
-    let hash_result = hasher.finalize();
-    println!("Finish");
-    Ok(hex::encode(hash_result))
 }
 
 #[derive(Serialize, Deserialize, Debug)]

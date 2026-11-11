@@ -7,3 +7,9 @@ Authorization: 123
   "val": 1,
   "enabled": true
 }
+
+###
+POST http://localhost:2380/api/list_dir
+Cookie: secret=DxeJgE50vP6VSNvYMTvI4TP2iWEN4vy6
+
+././../

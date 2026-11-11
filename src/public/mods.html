@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Mods</title>
     <link rel="stylesheet" href="main.css">
-    <link rel="icon" type="image/x-icon" href="icon.svg">
+    <link rel="icon" type="image/x-icon" href="icons/icon.svg">
 </head>
 <body customproperties withsidebar aligntop>
 <script src="main_data.js"></script>
@@ -77,6 +77,7 @@
         child.appendChild(indent_element);
         let pic = document.createElement("img");
         pic.style = "width: auto; height: auto; padding: 10px";
+        pic.style.imageRendering = "pixelated";
         if(mod.icon.length == 0) {
             pic.src = "https://cdn.modrinth.com/data/7EyjyjZ4/277b2a129eace8bfcc8a49054db2108a7aacf97a.png";
         } else pic.src = mod.icon;
@@ -213,7 +214,6 @@
                     let holder = document.getElementById("mod_"+hash+"_0");
                     let update_button = holder.querySelectorAll(".update_button")[0];
                     update_button = replaceElement(update_button, `<svgfrom src="download.svg"></svgfrom>`);
-                    update_button.style.background = "#00aa00";
                     let data = {
                         hash: hash,
                         file: mod.recent_update

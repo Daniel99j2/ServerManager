@@ -1,7 +1,10 @@
 use std::cmp::{min};
 use std::convert::Infallible;
-use std::fs;
-use std::io::Read;
+use std::{fs, io};
+use std::fs::File;
+use std::io::{Read, Write};
+use anvil_nbt::nbt::NbtTag;
+use anvil_nbt::nbt::parse::{parse_named_tag, ParseError};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Response, StatusCode};
@@ -9,11 +12,14 @@ use axum::Json;
 use axum::response::{IntoResponse, Sse};
 use axum::response::sse::{Event, KeepAlive};
 use axum_extra::extract::CookieJar;
+use flate2::Compression;
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha512};
 use tokio::sync::broadcast::Sender;
-use crate::{check_auth, create_status, safe_file, STATE, MinecraftStatus};
+use crate::{check_auth, create_status, get_file_safe, STATE, MinecraftStatus};
 
 #[derive(Deserialize)]
 pub(crate) struct ReadLogPayload {
@@ -69,7 +75,7 @@ async fn log_out(cookies: CookieJar, payload: ReadLogPayload, line_count: bool) 
     if let Some(out) = check_auth(cookies, None) {
         return out;
     }
-    match safe_file("./logs/", payload.name.as_str()) {
+    match get_file_safe("./logs/", payload.name.as_str()) {
         Ok(v) => {
             let out;
             if payload.name.ends_with(".gz") {
@@ -163,4 +169,55 @@ pub(crate) async fn api_live_logs(
         }
     };
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+pub(crate) fn hash_file(mut file: File) -> io::Result<String> {
+    let mut hasher = Sha512::new();
+    let mut buffer: [u8; 8192] = [0; 8192];
+
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+
+    let hash_result = hasher.finalize();
+    Ok(hex::encode(hash_result))
+}
+
+pub(crate) fn read_nbt(name: &String) -> Option<NbtTag> {
+    let file = match File::open(name) {
+        Ok(v) => {
+            v
+        }
+        Err(_) => {
+            return None;
+        }
+    };
+    let mut decoder = GzDecoder::new(file);
+    let mut data = Vec::new();
+    match decoder.read_to_end(&mut data) {
+        Ok(_) => {}
+        Err(_) => {
+            return None;
+        }
+    };
+
+    let mut input = &data[..];
+    match parse_named_tag(&mut input) {
+        Ok((name, tag)) => {
+            return Some(tag);
+        }
+        Err(_) => {
+            return None;
+        }
+    }
+}
+
+pub(crate) fn compress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data)?;
+    encoder.finish()
 }

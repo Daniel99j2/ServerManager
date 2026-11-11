@@ -1,6 +1,7 @@
 mod manage_server;
 mod get_info;
 mod mod_info;
+mod file_manager;
 
 use axum::body::Body;
 use axum::http::header::SET_COOKIE;
@@ -15,10 +16,13 @@ use include_dir::{include_dir};
 use mc_rpc::{Client};
 use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::{fs, io};
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use sha2::{Digest, Sha512};
 use tokio::sync::{broadcast};
 use tokio::sync::broadcast::Sender;
 use tokio::time::sleep;
@@ -191,7 +195,11 @@ async fn main() {
         .route("/api/mod_updates", get(mod_info::api_get_updates))
         .route("/api/mod_children", post(mod_info::api_child_mod))
         .route("/api/update_mods", post(mod_info::api_update_mods))
-        .route("/api/search_info", get(get_info::api_search_info))
+        .route("/api/search_info", post(get_info::api_search_info))
+        .route("/api/get_file", post(file_manager::api_get_file))
+        .route("/api/list_dir", post(file_manager::api_list_dir))
+        .route("/api/save_file", post(file_manager::api_save_file))
+        .route("/api/map_data", post(file_manager::api_map_data))
         .fallback_service(get(static_html))
         .with_state(transmitters.clone());
     include_bytes!("public/main.css");
@@ -430,7 +438,7 @@ fn run_command(command: String) -> String {
     out
 }
 
-fn safe_file(dir_name: &str, file_name: &str) -> Result<Vec<u8>, String> {
+fn is_safe_file(dir_name: &str, file_name: &str) -> bool {
     let dir_path = Path::new(dir_name);
     let full_path = dir_path.join(file_name);
 
@@ -438,22 +446,29 @@ fn safe_file(dir_name: &str, file_name: &str) -> Result<Vec<u8>, String> {
     let canonical_dir = match dir_path.canonicalize() {
         Ok(v) => v,
         Err(_) => {
-            return Err(format!("Can't canonicalize {}", dir_path.display()));
+            return false;
         }
     };
     let canonical_file = match full_path.canonicalize() {
         Ok(v) => v,
         Err(_) => {
-            return Err(format!("Can't canonicalize {}", full_path.display()));
+            return false;
         }
     };
 
     // it has to start with the intended directory
     if !canonical_file.starts_with(canonical_dir) {
-        return Err("File escaped the allowed dir".to_string());
+        return false;
+    }
+    true
+}
+
+fn get_file_safe(dir_name: &str, file_name: &str) -> Result<Vec<u8>, String> {
+    if !is_safe_file(dir_name, file_name) {
+        return Err("Not safe!".to_string());
     }
 
-    match fs::read(canonical_file) {
+    match fs::read(file_name) {
         Ok(v) => Ok(v),
         Err(_) => {
             Err("Failed to read file".to_string())
