@@ -5,10 +5,10 @@ mod file_manager;
 
 use axum::body::Body;
 use axum::http::header::SET_COOKIE;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::http::{Request, Response, Uri};
 use axum::response::{IntoResponse, Redirect};
-use axum::routing::post;
+use axum::routing::{post, put};
 use axum::{Router, routing::get};
 use axum_extra::extract::cookie::CookieJar;
 use include_dir::Dir as IncludedDir;
@@ -16,13 +16,11 @@ use include_dir::{include_dir};
 use mc_rpc::{Client};
 use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
-use std::{fs, io};
-use std::fs::File;
-use std::io::Read;
+use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use sha2::{Digest, Sha512};
+use reqwest::header::IF_NONE_MATCH;
 use tokio::sync::{broadcast};
 use tokio::sync::broadcast::Sender;
 use tokio::time::sleep;
@@ -78,8 +76,11 @@ static STATE: Mutex<AppState> = Mutex::new(AppState {
 
 const PAGES_DIR: IncludedDir = include_dir!("$CARGO_MANIFEST_DIR/src/gen/");
 
+static CACHE_KEY: OnceLock<String> = OnceLock::new();
+
 #[tokio::main]
 async fn main() {
+    CACHE_KEY.set(Alphanumeric.sample_string(&mut rand::rng(), 5)).expect("How???");
     let default_config = AppConfig {
         secret: Alphanumeric.sample_string(&mut rand::rng(), 32),
         auto_restart: true,
@@ -188,21 +189,21 @@ async fn main() {
         .route("/api/send_command", post(manage_server::api_send_command))
         .route("/api/reboot_server", post(manage_server::api_restart))
         .route("/api/kill_server", post(manage_server::api_kill))
-        .route("/api/read_log", post(get_info::api_read_log))
-        .route("/api/log_line_count", post(get_info::api_log_line_count))
+        .route("/api/read_log", get(get_info::api_read_log))
+        .route("/api/log_line_count", get(get_info::api_log_line_count))
         .route("/api/all_logs", get(get_info::api_all_logs))
         .route("/api/installed_mods", get(mod_info::api_installed_mods))
         .route("/api/mod_updates", get(mod_info::api_get_updates))
-        .route("/api/mod_children", post(mod_info::api_child_mod))
+        .route("/api/mod_children", get(mod_info::api_child_mod))
         .route("/api/update_mods", post(mod_info::api_update_mods))
-        .route("/api/search_info", post(get_info::api_search_info))
-        .route("/api/get_file", post(file_manager::api_get_file))
-        .route("/api/list_dir", post(file_manager::api_list_dir))
-        .route("/api/save_file", post(file_manager::api_save_file))
-        .route("/api/map_data", post(file_manager::api_map_data))
+        .route("/api/search_info", get(get_info::api_search_info))
+        .route("/api/file", get(file_manager::api_get_file))
+        .route("/api/file", put(file_manager::api_save_file))
+        .route("/api/file", post(file_manager::api_create_file))
+        .route("/api/list_dir", get(file_manager::api_list_dir))
+        .route("/api/map_data", get(file_manager::api_map_data))
         .fallback_service(get(static_html))
         .with_state(transmitters.clone());
-    include_bytes!("public/main.css");
 
     {
         let state = STATE.lock().unwrap();
@@ -213,7 +214,7 @@ async fn main() {
 
     tokio::spawn(async move {
         loop {
-            sleep(Duration::from_secs(CONFIG.get().unwrap().tps_update_interval_seconds as u64)).await;
+            sleep(Duration::from_secs(CONFIG.get().unwrap().tps_update_interval_seconds)).await;
 
             {
                 let mut state = STATE.lock().unwrap();
@@ -337,6 +338,14 @@ async fn static_html(cookies: CookieJar, req: Request<Body>) -> Response<Body> {
     } else if let Some(out) = check_auth(cookies, Some(uri)) {
         return out;
     }
+    match req.headers().get(IF_NONE_MATCH) {
+        None => {}
+        Some(v) => {
+            if v.eq(CACHE_KEY.get().unwrap()) {
+                return StatusCode::NOT_MODIFIED.into_response();
+            }
+        }
+    }
     let mut content_type = "";
     if !path.contains(".") {
         path = format!("{}.html", path);
@@ -349,13 +358,19 @@ async fn static_html(cookies: CookieJar, req: Request<Body>) -> Response<Body> {
         content_type = "text/javascript";
     }
 
+    let mut cache_time = 60*60;
+
+    if cfg!(debug_assertions) {
+        cache_time = 5;
+    }
+
     if PAGES_DIR.contains(path.clone()) {
         match PAGES_DIR.get_file(path) {
             None => {}
             Some(v) => {
                 return (
                     StatusCode::OK,
-                    [(header::CONTENT_TYPE, content_type)],
+                    [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, format!("max-age={}", cache_time).as_str()), (header::ETAG, CACHE_KEY.get().unwrap())],
                     v.contents().to_vec()
                 ).into_response();
             }
@@ -445,19 +460,22 @@ fn is_safe_file(dir_name: &str, file_name: &str) -> bool {
     // removes .. or symlinks
     let canonical_dir = match dir_path.canonicalize() {
         Ok(v) => v,
-        Err(_) => {
+        Err(e) => {
+            println!("Couldnt canicalize dir {}", e);
             return false;
         }
     };
     let canonical_file = match full_path.canonicalize() {
         Ok(v) => v,
-        Err(_) => {
+        Err(e) => {
+            println!("Couldnt canicalize file {}", e);
             return false;
         }
     };
 
     // it has to start with the intended directory
-    if !canonical_file.starts_with(canonical_dir) {
+    if !canonical_file.starts_with(&canonical_dir) {
+        println!("Didnt match - {:?}, {:?}", canonical_dir, canonical_file);
         return false;
     }
     true
@@ -468,10 +486,13 @@ fn get_file_safe(dir_name: &str, file_name: &str) -> Result<Vec<u8>, String> {
         return Err("Not safe!".to_string());
     }
 
-    match fs::read(file_name) {
+    let dir_path = Path::new(dir_name);
+    let full_path = dir_path.join(file_name);
+
+    match fs::read(full_path) {
         Ok(v) => Ok(v),
-        Err(_) => {
-            Err("Failed to read file".to_string())
+        Err(v) => {
+            Err(format!("Failed to read file: {} in {}, {}", file_name, dir_name, v))
         }
     }
 }
@@ -576,4 +597,9 @@ fn on_status_edited() {
     }
     fs::write("manager/previous_state.json", sending)
     .expect("Config could not be saved");
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct PathQueryParam {
+    pub(crate) path: String,
 }

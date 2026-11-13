@@ -20,11 +20,9 @@
 </body>
 <script type="text/javascript">
     async function reloadMods() {
-        const request = new XMLHttpRequest();
-        request.open("GET", "api/installed_mods");
-        request.onload = async function () {
-            if (request.status === 200) {
-                let val = JSON.parse(request.response);
+        request("GET", "api/installed_mods", async (out) => {
+            if(out.success) {
+                let val = out.as_json();
                 let mods = val[0];
                 console.log(mods)
                 document.getElementById("mod-holder").replaceChildren();
@@ -62,8 +60,7 @@
                     document.getElementById("mod-holder").prepend(child);
                 }
             }
-        }
-        request.send();
+        });
 
         //let mods = [{id: "lithium", name: "Lithium", file_name: "lithium-1.0.0.jar", needs_update: true, version: "1.0.0", icon: "https://cdn.modrinth.com/data/gvQqBUqZ/icon.png"}, {id: "carpet", name: "Carpet Mod", file_name: "fabric-carpet-latest.jar", needs_update: false, version: "1.2.0", icon: "https://cdn.modrinth.com/data/gvQqBUqZ/icon.png"}];
     }
@@ -135,11 +132,11 @@
                 expand.style.cursor = "not-allowed";
                 expand.style.filter = "brightness(0.7)";
                 expand.classList.add("expand-child-mods");
-                const request = new XMLHttpRequest();
-                request.open("POST", "api/mod_children");
-                request.onload = async function () {
-                    if (request.status === 200) {
-                        let mods = JSON.parse(request.response);
+                request_params("GET", "api/mod_children", {
+                    hash: mod.hash
+                }, async (out) => {
+                    if(out.success) {
+                        let mods = out.as_json();
                         console.log(mods)
                         for (let mod of mods) {
                             my_children.push(add_mod(mod, child, indent+1));
@@ -149,11 +146,7 @@
                         expand.onclick = hide;
                         expand.classList.add("expand-child-mods");
                     } else hide();
-                }
-                request.onerror = async function () {
-                    hide();
-                }
-                request.send(mod.hash);
+                });
             };
             hide = async function () {
                 expand = replaceElement(expand, `<svgfrom src="chevron-left.svg"></svgfrom>`);
@@ -185,13 +178,9 @@
     }
 
     async function update_all(event) {
-        const request = new XMLHttpRequest();
-        request.open("POST", "api/update_mods");
-        request.setRequestHeader("Content-Type", "application/json");
-        request.send(JSON.stringify(needs_update));
-        request.onload = async function () {
+        request_data("POST", "api/update_mods", needs_update, async (out) => {
             await reloadMods();
-        }
+        });
     }
 
     async function install_mods(event) {
@@ -201,12 +190,10 @@
     let needs_update = [];
 
     async function get_updates(event) {
-        const request = new XMLHttpRequest();
-        request.open("GET", "api/mod_updates");
-        request.onload = async function () {
-            if (request.status === 200) {
+        request("GET", "api/mod_updates", async (out) => {
+            if (out.success) {
                 needs_update = [];
-                let to_update = JSON.parse(request.response);
+                let to_update = out.as_json();
                 document.getElementById("update-all").disabled = to_update.length === 0;
                 for (const [hash, mod] of Object.entries(to_update)) {
                     console.log("mod_"+hash+"_0");
@@ -236,8 +223,7 @@
                     }
                 }
             }
-        }
-        request.send();
+        });
     }
 
     for (let i = 0; i < 10; i++) {

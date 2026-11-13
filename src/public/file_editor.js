@@ -58,11 +58,11 @@ function open_file(to) {
     document.getElementById("file-area").style.display = "block";
     document.getElementById("path-select").style.display = "none";
 
-    const request = new XMLHttpRequest();
-    request.open("POST", "api/get_file");
-    request.onload = async function () {
-        if (request.status === 200) {
-            let val = JSON.parse(request.responseText);
+    request_params("GET", "api/file", {
+        path: "."+(selected_dir + active_file)
+    }, async (out) => {
+        if(out.success) {
+            let val = out.as_json();
             if (current_editor != null) {
                 current_editor.delete();
                 current_editor = null;
@@ -83,8 +83,7 @@ function open_file(to) {
             }
             current_editor.on_opened(val);
         }
-    }
-    request.send("."+(selected_dir + active_file));
+    });
 }
 
 function save(event) {
@@ -92,25 +91,20 @@ function save(event) {
 }
 
 function save_internal(event, bypass) {
-    const request = new XMLHttpRequest();
-    request.open("POST", "api/save_file");
-    request.setRequestHeader("Content-Type", "application/json");
-    request.onload = async function () {
-        if (request.status === 200) {
-            current_editor.on_save();
-        } else if(request.status === 422 && request.responseText === "Wrong hash") {
-            if(confirm("The file has been changed since you started editing. Save anyway?")) {
-                save_internal(event, true);
-            }
-        }
-    }
-    let data = {
+    request_data("PUT", "api/file", {
         old_hash: open_file_hash,
         bypass_hash: bypass,
         path: "."+(selected_dir + active_file),
         content: current_editor.get_save_content()
-    }
-    request.send(JSON.stringify(data));
+    }, async (out) => {
+        if(out.success) {
+            current_editor.on_save();
+        } else if(out.status === 424 && out.as_text() === "File has changed") {
+            if(confirm("The file has been changed since you started editing. Save anyway?")) {
+                save_internal(event, true);
+            }
+        }
+    });
 }
 
 function select_path(to) {
@@ -129,10 +123,16 @@ function select_path(to) {
     document.getElementById("file-area").style.display = "none";
     document.getElementById("path-select").style.display = "block";
     document.getElementById("path-select").replaceChildren();
-    const request = new XMLHttpRequest();
-    request.open("POST", "api/list_dir");
-    request.onload = async function () {
-        if (request.status === 200) {
+
+    let get = selected_dir;
+    if(get.startsWith("/")) {
+        get = get.slice(1);
+    }
+    
+    request_params("GET", "api/list_dir", {
+        path: "./"+get
+    }, async (out) => {
+        if(out.success) {
             if (selected_dir.startsWith("/logs/")) {
                 let warning = document.createElement("a");
                 warning.href = "/logs";
@@ -145,13 +145,43 @@ function select_path(to) {
                 warning.textContent = "See the mods page for a better viewing experience";
                 document.getElementById("path-select").appendChild(warning);
             }
-            if (request.responseText.length === 0) {
+            if (out.as_text().length === 0) {
                 let info = document.createElement("p");
                 info.textContent = "Directory is empty.";
                 document.getElementById("path-select").appendChild(info);
             } else {
+                const options = {
+                    root: null,
+                    rootMargin: "0px",
+                    scrollMargin: "0px",
+                    threshold: 1.0,
+                };
+
+                observer = new IntersectionObserver((entries, observer) => {
+                    entries.forEach((entry) => {
+                        if(entry.target.dataset.map && entry.isIntersecting) {
+                            entry.target._request = create_map(entry.target.dataset.map, (img) => {
+                                entry.target._request = null;
+                                img.style.paddingRight = "0.2em";
+                                img.style.height = "1em";
+                                img.style.width = "auto";
+                                entry.target.parentElement.prepend(img);
+                                entry.target.remove();
+                            }, () => {
+                                entry.target._request = null;
+                            });
+                            entry.target.dataset.map_old = entry.target.dataset.map;
+                            delete entry.target.dataset.map;
+                        } else if(entry.target._request && !entry.isIntersecting) {
+                            entry.target._request.abort();
+                            delete entry.target._request;
+                            entry.target.dataset.map = entry.target.dataset.map_old;
+                        }
+                    });
+                }, options);
+
                 let last_divider = null;
-                for (let path of request.responseText.split("\n")) {
+                for (let path of out.as_text().split("\n")) {
                     if (path.length === 0) continue;
                     let selector = document.createElement("p");
                     selector.textContent = path;
@@ -170,22 +200,11 @@ function select_path(to) {
                     let icon = null;
                     if (selected_dir.includes("/data/maps/") && path.endsWith(".dat")) {
                         //svgs that already have their data dont trigger onload
-                        icon = createElement(`<img src="icons/file-signal.svg" alt="">`);
+                        icon = createElement(`<svgfrom src="file-signal.svg"></svgfrom>`);
                         icon.style.paddingRight = "0.2em";
-                        icon.style.height = "1em";
-                        icon.style.width = "auto";
-                        icon.loading = "lazy";
-                        icon.onload = () => {
-                            icon = replaceElement(icon, `<svgfrom src="file-signal.svg"></svgfrom>`);
-                            icon.style.paddingRight = "0.2em";
-                            create_map("." + selected_dir + path, (img) => {
-                                icon.remove();
-                                img.style.paddingRight = "0.2em";
-                                img.style.height = "1em";
-                                img.style.width = "auto";
-                                selector.prepend(img);
-                            });
-                        };
+                        icon.classList.add("map-loader");
+                        icon.dataset.map = "." + selected_dir + path;
+                        observer.observe(icon);
                     } else if (path.endsWith("/")) {
                         icon = createElement(`<svgfrom src="folder.svg"></svgfrom>`);
                     } else {
@@ -219,12 +238,7 @@ function select_path(to) {
                 if (last_divider != null) last_divider.remove();
             }
         }
-    }
-    let get = selected_dir;
-    if(get.startsWith("/")) {
-        get = get.slice(1);
-    }
-    request.send("./"+get);
+    });
 }
 
 window.addEventListener("load", () => {
@@ -240,119 +254,134 @@ window.addEventListener("load", () => {
     } else open("/");
 });
 
-function create_map(path, on_created) {
+let observer = null;
+
+function create_map(path, on_created, on_error) {
+    const url = new URL("api/map_data", window.location.origin);
+    const url_params = new URLSearchParams({
+        path: path
+    });
+    url.search = url_params.toString();
+    
     const request = new XMLHttpRequest();
     request.responseType = 'blob';
-    request.open("POST", "api/map_data");
+    request.open("GET", url);
     request.onload = async function () {
-        const blob = request.response;
-        const decompressedStream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
-        const decompressedBlob = await new Response(decompressedStream).blob();
+        if (request.status === 200) {
+            const blob = request.response;
+            const decompressedStream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+            const decompressedBlob = await new Response(decompressedStream).blob();
 
-        const bytes = await decompressedBlob.bytes();
+            const bytes = await decompressedBlob.bytes();
 
-        let base_colours = [
-            [0, 0, 0, 0], // 0 NONE
-            [127, 178, 56, 255], // 1 GRASS
-            [247, 233, 163, 255], // 2 SAND
-            [199, 199, 199, 255], // 3 WOOL
-            [255, 0, 0, 255], // 4 FIRE
-            [160, 160, 255, 255], // 5 ICE
-            [167, 167, 167, 255], // 6 METAL
-            [0, 124, 0, 255], // 7 PLANT
-            [255, 255, 255, 255], // 8 SNOW
-            [164, 168, 184, 255], // 9 CLAY
-            [151, 109, 77, 255], // 10 DIRT
-            [112, 112, 112, 255], // 11 STONE
-            [64, 64, 255, 255], // 12 WATER
-            [143, 119, 72, 255], // 13 WOOD
-            [255, 252, 245, 255], // 14 QUARTZ
-            [216, 127, 51, 255], // 15 COLOR_ORANGE
-            [178, 76, 216, 255], // 16 COLOR_MAGENTA
-            [102, 153, 216, 255], // 17 COLOR_LIGHT_BLUE
-            [229, 229, 51, 255], // 18 COLOR_YELLOW
-            [127, 204, 25, 255], // 19 COLOR_LIGHT_GREEN
-            [242, 127, 165, 255], // 20 COLOR_PINK
-            [76, 76, 76, 255], // 21 COLOR_GRAY
-            [153, 153, 153, 255], // 22 COLOR_LIGHT_GRAY
-            [76, 127, 153, 255], // 23 COLOR_CYAN
-            [127, 63, 178, 255], // 24 COLOR_PURPLE
-            [51, 76, 178, 255], // 25 COLOR_BLUE
-            [102, 76, 51, 255], // 26 COLOR_BROWN
-            [102, 127, 51, 255], // 27 COLOR_GREEN
-            [153, 51, 51, 255], // 28 COLOR_RED
-            [25, 25, 25, 255], // 29 COLOR_BLACK
-            [250, 238, 77, 255], // 30 GOLD
-            [92, 219, 213, 255], // 31 DIAMOND
-            [74, 128, 255, 255], // 32 LAPIS
-            [0, 217, 58, 255], // 33 EMERALD
-            [129, 86, 49, 255], // 34 PODZOL
-            [112, 2, 0, 255], // 35 NETHER
-            [209, 177, 161, 255], // 36 TERRACOTTA_WHITE
-            [159, 82, 36, 255], // 37 TERRACOTTA_ORANGE
-            [149, 87, 108, 255], // 38 TERRACOTTA_MAGENTA
-            [112, 108, 138, 255], // 39 TERRACOTTA_LIGHT_BLUE
-            [186, 133, 36, 255], // 40 TERRACOTTA_YELLOW
-            [103, 117, 53, 255], // 41 TERRACOTTA_LIGHT_GREEN
-            [160, 77, 78, 255], // 42 TERRACOTTA_PINK
-            [57, 41, 35, 255], // 43 TERRACOTTA_GRAY
-            [135, 107, 98, 255], // 44 TERRACOTTA_LIGHT_GRAY
-            [87, 92, 92, 255], // 45 TERRACOTTA_CYAN
-            [122, 73, 88, 255], // 46 TERRACOTTA_PURPLE
-            [76, 62, 92, 255], // 47 TERRACOTTA_BLUE
-            [76, 50, 35, 255], // 48 TERRACOTTA_BROWN
-            [76, 82, 42, 255], // 49 TERRACOTTA_GREEN
-            [142, 60, 46, 255], // 50 TERRACOTTA_RED
-            [37, 22, 16, 255], // 51 TERRACOTTA_BLACK
-            [189, 48, 49, 255], // 52 CRIMSON_NYLIUM
-            [148, 63, 97, 255], // 53 CRIMSON_STEM
-            [92, 25, 29, 255], // 54 CRIMSON_HYPHAE
-            [22, 126, 134, 255], // 55 WARPED_NYLIUM
-            [58, 142, 140, 255], // 56 WARPED_STEM
-            [86, 44, 62, 255], // 57 WARPED_HYPHAE
-            [20, 180, 133, 255], // 58 WARPED_WART_BLOCK
-            [100, 100, 100, 255], // 59 DEEPSLATE
-            [216, 175, 147, 255], // 60 RAW_IRON
-            [127, 167, 150, 255], // 61 GLOW_LICHEN
-        ];
+            let base_colours = [
+                [0, 0, 0, 0], // 0 NONE
+                [127, 178, 56, 255], // 1 GRASS
+                [247, 233, 163, 255], // 2 SAND
+                [199, 199, 199, 255], // 3 WOOL
+                [255, 0, 0, 255], // 4 FIRE
+                [160, 160, 255, 255], // 5 ICE
+                [167, 167, 167, 255], // 6 METAL
+                [0, 124, 0, 255], // 7 PLANT
+                [255, 255, 255, 255], // 8 SNOW
+                [164, 168, 184, 255], // 9 CLAY
+                [151, 109, 77, 255], // 10 DIRT
+                [112, 112, 112, 255], // 11 STONE
+                [64, 64, 255, 255], // 12 WATER
+                [143, 119, 72, 255], // 13 WOOD
+                [255, 252, 245, 255], // 14 QUARTZ
+                [216, 127, 51, 255], // 15 COLOR_ORANGE
+                [178, 76, 216, 255], // 16 COLOR_MAGENTA
+                [102, 153, 216, 255], // 17 COLOR_LIGHT_BLUE
+                [229, 229, 51, 255], // 18 COLOR_YELLOW
+                [127, 204, 25, 255], // 19 COLOR_LIGHT_GREEN
+                [242, 127, 165, 255], // 20 COLOR_PINK
+                [76, 76, 76, 255], // 21 COLOR_GRAY
+                [153, 153, 153, 255], // 22 COLOR_LIGHT_GRAY
+                [76, 127, 153, 255], // 23 COLOR_CYAN
+                [127, 63, 178, 255], // 24 COLOR_PURPLE
+                [51, 76, 178, 255], // 25 COLOR_BLUE
+                [102, 76, 51, 255], // 26 COLOR_BROWN
+                [102, 127, 51, 255], // 27 COLOR_GREEN
+                [153, 51, 51, 255], // 28 COLOR_RED
+                [25, 25, 25, 255], // 29 COLOR_BLACK
+                [250, 238, 77, 255], // 30 GOLD
+                [92, 219, 213, 255], // 31 DIAMOND
+                [74, 128, 255, 255], // 32 LAPIS
+                [0, 217, 58, 255], // 33 EMERALD
+                [129, 86, 49, 255], // 34 PODZOL
+                [112, 2, 0, 255], // 35 NETHER
+                [209, 177, 161, 255], // 36 TERRACOTTA_WHITE
+                [159, 82, 36, 255], // 37 TERRACOTTA_ORANGE
+                [149, 87, 108, 255], // 38 TERRACOTTA_MAGENTA
+                [112, 108, 138, 255], // 39 TERRACOTTA_LIGHT_BLUE
+                [186, 133, 36, 255], // 40 TERRACOTTA_YELLOW
+                [103, 117, 53, 255], // 41 TERRACOTTA_LIGHT_GREEN
+                [160, 77, 78, 255], // 42 TERRACOTTA_PINK
+                [57, 41, 35, 255], // 43 TERRACOTTA_GRAY
+                [135, 107, 98, 255], // 44 TERRACOTTA_LIGHT_GRAY
+                [87, 92, 92, 255], // 45 TERRACOTTA_CYAN
+                [122, 73, 88, 255], // 46 TERRACOTTA_PURPLE
+                [76, 62, 92, 255], // 47 TERRACOTTA_BLUE
+                [76, 50, 35, 255], // 48 TERRACOTTA_BROWN
+                [76, 82, 42, 255], // 49 TERRACOTTA_GREEN
+                [142, 60, 46, 255], // 50 TERRACOTTA_RED
+                [37, 22, 16, 255], // 51 TERRACOTTA_BLACK
+                [189, 48, 49, 255], // 52 CRIMSON_NYLIUM
+                [148, 63, 97, 255], // 53 CRIMSON_STEM
+                [92, 25, 29, 255], // 54 CRIMSON_HYPHAE
+                [22, 126, 134, 255], // 55 WARPED_NYLIUM
+                [58, 142, 140, 255], // 56 WARPED_STEM
+                [86, 44, 62, 255], // 57 WARPED_HYPHAE
+                [20, 180, 133, 255], // 58 WARPED_WART_BLOCK
+                [100, 100, 100, 255], // 59 DEEPSLATE
+                [216, 175, 147, 255], // 60 RAW_IRON
+                [127, 167, 150, 255], // 61 GLOW_LICHEN
+            ];
 
-        let colours = [];
+            let colours = [];
 
-        for (let base_colour of base_colours) {
-            colours.push([base_colour[0] * 0.71, base_colour[1] * 0.71, base_colour[2] * 0.71, base_colour[3]]);
-            colours.push([base_colour[0] * 0.86, base_colour[1] * 0.86, base_colour[2] * 0.86, base_colour[3]]);
-            colours.push(base_colour);
-            colours.push([base_colour[0] * 0.53, base_colour[1] * 0.53, base_colour[2] * 0.53, base_colour[3]]);
-        }
+            for (let base_colour of base_colours) {
+                colours.push([base_colour[0] * 0.71, base_colour[1] * 0.71, base_colour[2] * 0.71, base_colour[3]]);
+                colours.push([base_colour[0] * 0.86, base_colour[1] * 0.86, base_colour[2] * 0.86, base_colour[3]]);
+                colours.push(base_colour);
+                colours.push([base_colour[0] * 0.53, base_colour[1] * 0.53, base_colour[2] * 0.53, base_colour[3]]);
+            }
 
-        let size = 128;
+            let size = 128;
 
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext('2d');
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
 
-        const imgData = ctx.createImageData(size, size);
-        const data = imgData.data;
+            const imgData = ctx.createImageData(size, size);
+            const data = imgData.data;
 
-        let imgIndex = 0;
+            let imgIndex = 0;
 
-        for (let i = 0; i < bytes.length; i++) {
-            let colour = colours[bytes[i]];
-            data[imgIndex] = colour[0];
-            data[imgIndex + 1] = colour[1];
-            data[imgIndex + 2] = colour[2];
-            data[imgIndex + 3] = colour[3];
-            imgIndex += 4;
-        }
+            for (let i = 0; i < bytes.length; i++) {
+                let colour = colours[bytes[i]];
+                data[imgIndex] = colour[0];
+                data[imgIndex + 1] = colour[1];
+                data[imgIndex + 2] = colour[2];
+                data[imgIndex + 3] = colour[3];
+                imgIndex += 4;
+            }
 
-        ctx.putImageData(imgData, 0, 0);
+            ctx.putImageData(imgData, 0, 0);
 
-        const dataUrl = canvas.toDataURL();
-        const img = document.createElement('img');
-        img.src = dataUrl;
-        img.style.imageRendering = "pixelated";
-        on_created(img);
+            const dataUrl = canvas.toDataURL();
+            const img = document.createElement('img');
+            img.src = dataUrl;
+            img.style.imageRendering = "pixelated";
+            img.style.verticalAlign = "-0.125em";
+            on_created(img);
+        } else on_error();
     };
-    request.send(path);
+    request.onerror = async () => {
+        on_error();
+    };
+    request.send();
+    return request;
 }

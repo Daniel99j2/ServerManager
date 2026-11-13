@@ -35,11 +35,8 @@
 
     async function run_command(event) {
         event.preventDefault();
-        const secret = document.getElementById("command").value;
 
-        const request = new XMLHttpRequest();
-        request.open("POST", "api/send_command");
-        request.send(secret);
+        request_data("POST", "api/send_command", document.getElementById("command").value, async (out) => {});
     }
 
     document.addEventListener("status_update", (event) => {
@@ -59,16 +56,14 @@
             console.error("Error in EventSource:", error);
         };
     } else {
-        current_line = 0;
-        const request = new XMLHttpRequest();
-        request.open("POST", "api/log_line_count");
-        request.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
-        request.onload = async function () {
-            if (request.status === 200) {
-                current_line = parseInt(request.response);
+        //current_line = 0;
+        request_params("GET", "api/log_line_count", {
+            path: file_name
+        }, async (out) => {
+            if(out.success) {
+                current_line = parseInt(out.as_text());
             }
-        }
-        request.send(file_name);
+        });
     }
 
     let is_refreshing = false;
@@ -77,9 +72,6 @@
         if(current_line === -1 || is_refreshing) return;
         if(document.getElementById("log-div").scrollTop < 100) {
             is_refreshing = true;
-            const request = new XMLHttpRequest();
-            request.open("POST", "api/read_log");
-            request.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
             let length = 100;
             let get_from = current_line - length;
             if(get_from < 0) {
@@ -87,18 +79,17 @@
                 length += get_from;
                 get_from = 0;
             }
-            request.onload = async function () {
-                is_refreshing = false;
-                if(request.status === 200) {
-                    current_line = get_from;
-                    handle_lines(request.response, true);
-                }
-            }
-            request.send(JSON.stringify({
+            request_params("GET", "api/read_log", {
                 start: get_from,
                 lines: length,
                 name: file_name
-            }));
+            }, async (out) => {
+                is_refreshing = false;
+                if(out.success) {
+                    current_line = get_from;
+                    handle_lines(out.as_text(), true);
+                }
+            });
         }
     }, 10);
 

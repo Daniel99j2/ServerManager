@@ -1,19 +1,18 @@
+use crate::get_info::{compress_bytes, hash_file, read_nbt};
+use crate::{PathQueryParam, check_auth, get_info, is_safe_file};
+use anvil_nbt::nbt::serde_impl::from_nbt;
+use axum::Json;
+use axum::body::{Body, Bytes};
+use axum::extract::{Multipart, Query};
+use axum::http::{Response, header};
+use axum::response::IntoResponse;
+use axum_extra::extract::CookieJar;
+use content_inspector::inspect;
+use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::fs::File;
 use std::io::Read;
-use anvil_nbt::nbt::NbtTag;
-use axum::body::{Body, Bytes};
-use axum::http::{header, Response};
-use axum::Json;
-use axum::response::IntoResponse;
-use axum_extra::extract::CookieJar;
-use content_inspector::{inspect, ContentType};
-use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
-use crate::{check_auth, get_info, is_safe_file};
-use crate::get_info::{compress_bytes, hash_file, read_nbt};
-use anvil_nbt::nbt::serde_impl::{to_nbt, from_nbt};
-use base64::{engine::general_purpose::STANDARD, Engine};
 
 #[derive(Deserialize)]
 pub(crate) struct SaveFilePayload {
@@ -33,7 +32,7 @@ pub(crate) async fn api_save_file(cookies: CookieJar, Json(payload): Json<SaveFi
     }
     if !payload.bypass_hash {
         if get_info::hash_file(File::open(&path).unwrap()).unwrap_or("FAILED TO HASH".to_string()) != payload.old_hash {
-            return (StatusCode::UNPROCESSABLE_ENTITY, "Wrong hash").into_response();
+            return (StatusCode::FAILED_DEPENDENCY, "File has changed").into_response();
         }
     }
     match fs::write(path, payload.content) {
@@ -46,6 +45,20 @@ pub(crate) async fn api_save_file(cookies: CookieJar, Json(payload): Json<SaveFi
     }
 }
 
+pub(crate) async fn api_create_file(cookies: CookieJar, mut multipart: Multipart) -> Response<Body> {
+    if let Some(out) = check_auth(cookies, None) {
+        return out;
+    }
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap().to_string();
+        let data = field.bytes().await.unwrap();
+
+        println!("Length of `{}` is {} bytes", name, data.len());
+    }
+
+    (StatusCode::OK, "YES").into_response()
+}
+
 #[derive(Serialize)]
 pub(crate) struct GetFilePayload {
     hash: String,
@@ -53,7 +66,8 @@ pub(crate) struct GetFilePayload {
     editor: String
 }
 
-pub(crate) async fn api_get_file(cookies: CookieJar, payload: String) -> Response<Body> {
+pub(crate) async fn api_get_file(cookies: CookieJar, Query(params): Query<PathQueryParam>) -> Response<Body> {
+    let payload = params.path;
     if let Some(out) = check_auth(cookies, None) {
         return out;
     }
@@ -128,7 +142,8 @@ struct MapData {
     data: MapDataData,
 }
 
-pub(crate) async fn api_map_data(cookies: CookieJar, payload: String) -> Response<Body> {
+pub(crate) async fn api_map_data(cookies: CookieJar, Query(params): Query<PathQueryParam>) -> Response<Body> {
+    let payload = params.path;
     if let Some(out) = check_auth(cookies, None) {
         return out;
     }
@@ -137,7 +152,7 @@ pub(crate) async fn api_map_data(cookies: CookieJar, payload: String) -> Respons
     }
     let nbt = match read_nbt(&payload) {
         None => {
-            return (StatusCode::BAD_REQUEST, "Failed to read NBT").into_response();
+            return (StatusCode::ACCEPTED, "Failed to read NBT").into_response();
         }
         Some(v) => {
             v
@@ -145,7 +160,7 @@ pub(crate) async fn api_map_data(cookies: CookieJar, payload: String) -> Respons
     };
     let decoded: MapData = match from_nbt(nbt) {
         Err(v) => {
-            return (StatusCode::BAD_REQUEST, format!("Failed to deserialize to data {}", v)).into_response();
+            return (StatusCode::ACCEPTED, format!("Failed to deserialize to data {}", v)).into_response();
         }
         Ok(v) => {
             v
@@ -153,15 +168,16 @@ pub(crate) async fn api_map_data(cookies: CookieJar, payload: String) -> Respons
     };
     match compress_bytes(&*decoded.data.colors) {
         Err(v) => {
-            (StatusCode::BAD_REQUEST, format!("Failed to compress data {}", v)).into_response()
+            (StatusCode::ACCEPTED, format!("Failed to compress data {}", v)).into_response()
         }
         Ok(v) => {
-            (StatusCode::OK, [(header::CONTENT_TYPE, "application/octet-stream")], Bytes::from(v)).into_response()
+            (StatusCode::OK, [(header::CONTENT_TYPE, "application/octet-stream"), (header::CACHE_CONTROL, "max-age=30")], Bytes::from(v)).into_response()
         }
     }
 }
 
-pub(crate) async fn api_list_dir(cookies: CookieJar, payload: String) -> Response<Body> {
+pub(crate) async fn api_list_dir(cookies: CookieJar, Query(params): Query<PathQueryParam>) -> Response<Body> {
+    let payload = params.path;
     if let Some(out) = check_auth(cookies, None) {
         return out;
     }
@@ -187,7 +203,8 @@ pub(crate) async fn api_list_dir(cookies: CookieJar, payload: String) -> Respons
             }
             (StatusCode::OK, out.join("\n")).into_response()
         }
-        Err(_) => {
+        Err(v) => {
+            println!("Failed to find {}, {}", payload, v);
             (StatusCode::BAD_REQUEST, "Failed to find dir").into_response()
         }
     }

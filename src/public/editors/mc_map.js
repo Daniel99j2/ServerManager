@@ -14,6 +14,10 @@ export default {
         create_map("." + selected_dir + active_file, (img) => {
             img.style.height = "min(60vw, 60vh)";
             document.getElementById("file-area").appendChild(img);
+        }, () => {
+            let v = document.createElement("h3");
+            v.textContent = "Map could not be loaded"
+            document.getElementById("file-area").appendChild(v);
         });
     },
 

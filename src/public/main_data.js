@@ -87,3 +87,61 @@ function getRelativeTimeString(isoString) {
         return rtf.format(Math.round(diffMs / year), 'year');
     }
 }
+
+function request(method, path, done) {
+    request_params_data(method, path, {}, null, done);
+}
+
+function request_data(method, path, data, done) {
+    request_params_data(method, path, {}, data, done);
+}
+
+function request_params(method, path, params, done) {
+    request_params_data(method, path, params, null, done);
+}
+
+function request_params_data(method, path, params, data, done) {
+    let url = null;
+    if(path.includes("://")) {
+        url = new URL(path);
+    } else {
+        url = new URL(path, window.location.origin);
+    }
+    const url_params = new URLSearchParams(params);
+    url.search = url_params.toString();
+
+    const request = new XMLHttpRequest();
+    request.open(method, url);
+    request.onload = async function () {
+        await done({
+            status: request.status,
+            request: request,
+            success: request.status === 200,
+            as_json() {
+                return JSON.parse(request.response);
+            },
+            as_text() {
+                return request.responseText;
+            }
+        });
+    };
+    request.onerror = async function () {
+        await done({
+            status: -1,
+            request: request,
+            success: false,
+            as_json() {
+                throw "Cant turn a failed response into json, silly!";
+            },
+            as_text() {
+                throw "Cant get response text from a failed response";
+            }
+        });
+    };
+    let sending = data;
+    if(typeof sending === 'object' && sending != null) {
+        sending = JSON.stringify(sending);
+        request.setRequestHeader("Content-Type", "application/json");
+    }
+    request.send(sending);
+}

@@ -5,7 +5,6 @@ use axum::response::IntoResponse;
 use axum_extra::extract::CookieJar;
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha512};
 use std::collections::HashMap;
 use std::env::temp_dir;
 use std::fs::{DirEntry, File};
@@ -13,6 +12,7 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
+use axum::extract::Query;
 use axum::Json;
 use zip::ZipArchive;
 
@@ -56,7 +56,11 @@ pub(crate) async fn api_installed_mods(cookies: CookieJar) -> Response<Body> {
     (StatusCode::OK, serde_json::to_string_pretty(&(mods, duplicate_names)).unwrap()).into_response()
 }
 
-pub(crate) async fn api_child_mod(cookies: CookieJar, payload: String) -> Response<Body> {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ModHashQuery {
+    pub(crate) hash: String,
+}
+pub(crate) async fn api_child_mod(cookies: CookieJar, Query(payload): Query<ModHashQuery>) -> Response<Body> {
     if let Some(out) = check_auth(cookies, None) {
         return out;
     }
@@ -66,7 +70,7 @@ pub(crate) async fn api_child_mod(cookies: CookieJar, payload: String) -> Respon
 
     {
         let cache = MOD_CACHE.lock().unwrap();
-        match cache.get(&payload.clone()) {
+        match cache.get(&payload.hash.clone()) {
             None => {
                 return (StatusCode::BAD_REQUEST, "Unknown mod").into_response();
             }
@@ -106,9 +110,9 @@ pub(crate) async fn api_child_mod(cookies: CookieJar, payload: String) -> Respon
                     hashes.push(x.hash.clone());
                 }
                 let mut mutex2 = MOD_CACHE.lock().unwrap();
-                let mut current = mutex2.get(payload.as_str()).unwrap().clone();
+                let mut current = mutex2.get(payload.hash.as_str()).unwrap().clone();
                 current.resolved_children = Some(hashes);
-                mutex2.insert(payload.clone(), current);
+                mutex2.insert(payload.hash.clone(), current);
             }
             save_cached_mods();
             (StatusCode::OK, serde_json::to_string(&v).unwrap()).into_response()

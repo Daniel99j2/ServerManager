@@ -23,24 +23,18 @@
     async function search(event) {
         if(event != null) event.preventDefault();
         document.getElementById("mod-holder").replaceChildren();
-        const url = new URL('https://api.modrinth.com/v2/search');
-        const params = new URLSearchParams({
+
+        request_params("GET", "https://api.modrinth.com/v2/search", {
             query: document.getElementById("search-box").value,
             facets: `[["categories:LOADER"],["versions:VERSION"],["project_type:mod"]]`.replace("LOADER", loader).replace("VERSION", game_version)
-        });
-        url.search = params.toString();
-
-        const request = new XMLHttpRequest();
-        request.open("GET", url);
-        request.onload = async function () {
-            if (request.status === 200) {
-                let response = JSON.parse(request.response);
+        }, async (out) => {
+            if (out.success) {
+                let response = out.as_json();
                 for (const result of response.hits) {
                     add_mod(result);
                 }
             }
-        };
-        request.send();
+        });
     }
 
     function add_mod(result) {
@@ -126,24 +120,19 @@
     let loader = "";
 
     async function load() {
-        const request1 = new XMLHttpRequest();
-        request1.open("GET", "api/search_info");
-        request1.onload = async function () {
-            if (request1.status === 200) {
-                game_version = request1.response.split(",")[0];
-                loader = request1.response.split(",")[1];
+        request("GET", "api/search_info", async (out) => {
+            if (out.success) {
+                game_version = out.as_text().split(",")[0];
+                loader = out.as_text().split(",")[1];
                 await doTheRestOfLoad();
             }
-        }
-        request1.send();
+        });
     }
 
     async function doTheRestOfLoad() {
-        const request = new XMLHttpRequest();
-        request.open("GET", "https://api.modrinth.com/v2/tag/category");
-        request.onload = async function () {
-            if (request.status === 200) {
-                let categories = JSON.parse(request.response);
+        request("GET", "https://api.modrinth.com/v2/tag/category", async (out) => {
+            if (out.success) {
+                let categories = out.as_json();
                 for (const category of categories) {
                     console.log(category);
                     if(category.project_type === "mod") {
@@ -161,8 +150,7 @@
                     }
                 }
             }
-        };
-        request.send();
+        });
 
         await search(null);
     }

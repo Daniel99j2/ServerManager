@@ -43,25 +43,15 @@
         }
     });
     async function startStop(event) {
-        const request = new XMLHttpRequest();
-        request.open("POST", latest_data.status_online ? "api/stop_server" : "api/start_server");
-        request.onload = async function () {
-            if(request.status === 200) {
-            }
-        }
-        request.send();
+        request("POST", latest_data.status_online ? "api/stop_server" : "api/start_server", async (out) => {});
     }
 
     async function reboot(event) {
-        const request = new XMLHttpRequest();
-        request.open("POST", "api/reboot_server");
-        request.send();
+        request("POST", "api/reboot_server", async (out) => {});
     }
 
     async function kill(event) {
-        const request = new XMLHttpRequest();
-        request.open("POST", "api/kill_server");
-        request.send();
+        request("POST", "api/kill_server", async (out) => {});
     }
 </script>
 <h1>Dashboard</h1>

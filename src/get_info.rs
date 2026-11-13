@@ -1,25 +1,24 @@
-use std::cmp::{min};
-use std::convert::Infallible;
-use std::{fs, io};
-use std::fs::File;
-use std::io::{Read, Write};
+use crate::{MinecraftStatus, PathQueryParam, STATE, check_auth, create_status, get_file_safe};
 use anvil_nbt::nbt::NbtTag;
-use anvil_nbt::nbt::parse::{parse_named_tag, ParseError};
+use anvil_nbt::nbt::parse::parse_named_tag;
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{Response, StatusCode};
-use axum::Json;
-use axum::response::{IntoResponse, Sse};
 use axum::response::sse::{Event, KeepAlive};
+use axum::response::{IntoResponse, Sse};
 use axum_extra::extract::CookieJar;
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use futures_util::Stream;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha512};
+use std::cmp::min;
+use std::convert::Infallible;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::{fs, io};
 use tokio::sync::broadcast::Sender;
-use crate::{check_auth, create_status, get_file_safe, STATE, MinecraftStatus};
 
 #[derive(Deserialize)]
 pub(crate) struct ReadLogPayload {
@@ -28,7 +27,7 @@ pub(crate) struct ReadLogPayload {
     name: String
 }
 
-pub(crate) async fn api_read_log(cookies: CookieJar, Json(payload): Json<ReadLogPayload>) -> Response<Body> {
+pub(crate) async fn api_read_log(cookies: CookieJar, Query(payload): Query<ReadLogPayload>) -> Response<Body> {
     log_out(cookies, payload, false).await
 }
 
@@ -59,16 +58,17 @@ pub(crate) async fn api_all_logs(cookies: CookieJar) -> Response<Body> {
                     }
                 }
             }
-            (StatusCode::OK, names.join(", ")).into_response()
+            (StatusCode::OK, names.join("\n")).into_response()
         }
-        Err(_) => {
+        Err(v) => {
+            dbg!("Failed to get logs {}", v);
             (StatusCode::BAD_REQUEST, "Failed to get logs").into_response()
         }
     }
 }
 
-pub(crate) async fn api_log_line_count(cookies: CookieJar, payload: String) -> Response<Body> {
-    log_out(cookies, ReadLogPayload { start: 0, lines: 0, name: payload }, true).await
+pub(crate) async fn api_log_line_count(cookies: CookieJar, Query(params): Query<PathQueryParam>) -> Response<Body> {
+    log_out(cookies, ReadLogPayload { start: 0, lines: 0, name: params.path }, true).await
 }
 
 async fn log_out(cookies: CookieJar, payload: ReadLogPayload, line_count: bool) -> Response<Body> {
@@ -86,7 +86,7 @@ async fn log_out(cookies: CookieJar, payload: ReadLogPayload, line_count: bool) 
                         out = s.into_bytes();
                     }
                     Err(v) => {
-                        return (StatusCode::OK, format!("Error: {}", v)).into_response();
+                        return (StatusCode::BAD_REQUEST, format!("Error: {}", v)).into_response();
                     }
                 };
             } else {
@@ -103,11 +103,13 @@ async fn log_out(cookies: CookieJar, payload: ReadLogPayload, line_count: bool) 
                         }
                     }
                     Err(e) => {
+                        dbg!("Error: {}", &e);
                         return (StatusCode::BAD_REQUEST, format!("Error: {}", e)).into_response();
                     }
                 }).into_response()
         }
         Err(v) => {
+            dbg!("Error: {}", &v);
             (StatusCode::BAD_REQUEST, format!("Error: {}", v)).into_response()
         }
     }
@@ -207,7 +209,7 @@ pub(crate) fn read_nbt(name: &String) -> Option<NbtTag> {
 
     let mut input = &data[..];
     match parse_named_tag(&mut input) {
-        Ok((name, tag)) => {
+        Ok((_, tag)) => {
             return Some(tag);
         }
         Err(_) => {
